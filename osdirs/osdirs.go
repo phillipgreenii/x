@@ -4,26 +4,45 @@
 package osdirs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 )
 
 // StateDir returns ${XDG_STATE_HOME}/<app>, falling back to
-// $HOME/.local/state/<app> when XDG_STATE_HOME is unset.
-func StateDir(app string) string {
-	return filepath.Join(xdgDir("XDG_STATE_HOME", ".local", "state"), app)
+// $HOME/.local/state/<app> when XDG_STATE_HOME is unset. It errors rather
+// than falling back further if HOME is also unset -- see xdgDir.
+func StateDir(app string) (string, error) {
+	dir, err := xdgDir("XDG_STATE_HOME", ".local", "state")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, app), nil
 }
 
 // ConfigDir returns ${XDG_CONFIG_HOME}/<app>, falling back to
-// $HOME/.config/<app> when XDG_CONFIG_HOME is unset.
-func ConfigDir(app string) string {
-	return filepath.Join(xdgDir("XDG_CONFIG_HOME", ".config"), app)
+// $HOME/.config/<app> when XDG_CONFIG_HOME is unset. It errors rather than
+// falling back further if HOME is also unset -- see xdgDir.
+func ConfigDir(app string) (string, error) {
+	dir, err := xdgDir("XDG_CONFIG_HOME", ".config")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, app), nil
 }
 
-func xdgDir(envVar string, fallbackRelParts ...string) string {
+// xdgDir resolves envVar, falling back to $HOME/fallbackRelParts. It
+// returns an error rather than silently resolving to a bare relative path
+// (e.g. ".local/state") when HOME is also unset -- that would make the
+// caller's directory depend on whatever the current working directory
+// happens to be.
+func xdgDir(envVar string, fallbackRelParts ...string) (string, error) {
 	if v := os.Getenv(envVar); v != "" {
-		return v
+		return v, nil
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(append([]string{home}, fallbackRelParts...)...)
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("osdirs: neither " + envVar + " nor HOME/user home directory is set")
+	}
+	return filepath.Join(append([]string{home}, fallbackRelParts...)...), nil
 }

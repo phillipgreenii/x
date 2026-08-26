@@ -5,6 +5,7 @@
 package jsonllogger
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,7 +14,11 @@ import (
 
 // New returns a *slog.Logger writing structured JSONL (lowercase level,
 // UTC time) to ${XDG_STATE_HOME}/<app>/<app>.jsonl, falling back to
-// $HOME/.local/state when XDG_STATE_HOME is unset.
+// $HOME/.local/state when XDG_STATE_HOME is unset. It returns an error
+// rather than falling back further if HOME is also unset: silently
+// resolving to a bare ".local/state/<app>/<app>.jsonl" would make the log
+// file's location depend on whatever directory the process happens to be
+// run from.
 //
 // The file is APPENDED to, never truncated, so restarting the app keeps the
 // previous run's log. It stays open for the process lifetime (the logger owns
@@ -21,7 +26,11 @@ import (
 func New(app string) (*slog.Logger, error) {
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
-		state = filepath.Join(os.Getenv("HOME"), ".local", "state")
+		home := os.Getenv("HOME")
+		if home == "" {
+			return nil, errors.New("jsonllogger: neither XDG_STATE_HOME nor HOME is set")
+		}
+		state = filepath.Join(home, ".local", "state")
 	}
 	dir := filepath.Join(state, app)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

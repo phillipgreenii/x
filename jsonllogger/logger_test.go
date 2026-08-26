@@ -103,6 +103,24 @@ func TestNewFallsBackToHomeLocalState(t *testing.T) {
 	}
 }
 
+// TestNewErrorsWhenNeitherXDGStateHomeNorHOMEIsSet guards against silently
+// falling back further to a CWD-relative path (".local/state/<app>/...")
+// when HOME is also unset -- that would make the log file's location
+// depend on whatever directory the process happens to be run from.
+func TestNewErrorsWhenNeitherXDGStateHomeNorHOMEIsSet(t *testing.T) {
+	for _, v := range []string{"XDG_STATE_HOME", "HOME"} {
+		t.Setenv(v, "")
+		if err := os.Unsetenv(v); err != nil {
+			t.Fatalf("unset %s: %v", v, err)
+		}
+	}
+	t.Chdir(t.TempDir()) // belt-and-suspenders: even a regression must not write here
+
+	if _, err := New(testApp); err == nil {
+		t.Fatal("expected an error when neither XDG_STATE_HOME nor HOME is set")
+	}
+}
+
 // TestNewAppendsRatherThanTruncating is the regression guard on the open flags:
 // a second logger over the same path must APPEND, so the first run's lines
 // survive. Losing os.O_APPEND (or gaining os.O_TRUNC) is silent data loss.
