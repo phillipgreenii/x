@@ -1,8 +1,6 @@
 // Package osdirs resolves per-application XDG state and config directories,
 // with the $HOME fallback the XDG Base Directory spec requires when the
-// corresponding environment variable is unset. This one helper replaces the
-// independently hand-rolled copies of the same fallback logic found across
-// this workspace's Go binaries.
+// corresponding environment variable is unset.
 package osdirs
 
 import (

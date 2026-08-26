@@ -135,9 +135,9 @@ func TestNewAppendsRatherThanTruncating(t *testing.T) {
 	}
 }
 
-// TestNewWritesADR0038Fields asserts New's handler applies the ADR 0038
+// TestNewWritesNormalizedFields asserts New's handler applies the field
 // normalization (not just that a file appears): lowercase level, UTC time.
-func TestNewWritesADR0038Fields(t *testing.T) {
+func TestNewWritesNormalizedFields(t *testing.T) {
 	state := xdgStateHome(t)
 
 	log, err := New(testApp)
@@ -150,7 +150,7 @@ func TestNewWritesADR0038Fields(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("got %d JSONL lines, want 1: %v", len(lines), lines)
 	}
-	assertADR0038Fields(t, lines[0])
+	assertNormalizedFields(t, lines[0])
 }
 
 // TestNewErrorsWhenStateDirCannotBeCreated covers the os.MkdirAll arm: a
@@ -195,9 +195,9 @@ func TestNewErrorsWhenLogFileCannotBeOpened(t *testing.T) {
 	assertPathError(t, err, "open", logPath)
 }
 
-// TestReplaceAttrNormalizesLevelAndTime exercises ReplaceAttr (ADR 0038:
-// lowercase level, UTC time) directly against a JSONHandler writing to a
-// buffer, without touching the filesystem.
+// TestReplaceAttrNormalizesLevelAndTime exercises ReplaceAttr (lowercase
+// level, UTC time) directly against a JSONHandler writing to a buffer,
+// without touching the filesystem.
 func TestReplaceAttrNormalizesLevelAndTime(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{ReplaceAttr: ReplaceAttr}))
@@ -208,11 +208,11 @@ func TestReplaceAttrNormalizesLevelAndTime(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode JSONL line: %v (raw: %s)", err, buf.String())
 	}
-	assertADR0038Fields(t, decoded)
+	assertNormalizedFields(t, decoded)
 }
 
-// assertADR0038Fields checks the level/time normalization ADR 0038 requires.
-func assertADR0038Fields(t *testing.T, decoded map[string]any) {
+// assertNormalizedFields checks the level/time normalization New's handler applies.
+func assertNormalizedFields(t *testing.T, decoded map[string]any) {
 	t.Helper()
 	level, _ := decoded["level"].(string)
 	if level != "info" {

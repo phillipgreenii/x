@@ -1,27 +1,31 @@
 # x
 
-Shared Go library for `phillipgreenii`'s own CLI tools and daemons — the plumbing common to
-several small programs (structured logging, XDG directory resolution, and more as it grows),
-extracted so there is one implementation instead of several independently hand-rolled ones.
+A small collection of Go packages for building CLI tools and daemons: structured logging and
+XDG directory resolution, with more added as needed.
 
-This is a **plain Go module, not a nix flake.** It is consumed the same way any third-party Go
-dependency is: `go get github.com/phillipgreenii/x@<commit-sha>`, then `go mod tidy`. There are
-no release tags — pin a commit SHA and bump it like any other dependency.
+This is a plain Go module — not a nix flake. Add it the way you'd add any Go dependency:
+
+```
+go get github.com/phillipgreenii/x@<commit-sha>
+```
+
+There are no release tags; pin a commit and bump it like any other dependency.
 
 ## Packages
 
-- `jsonllogger` — the ADR 0038 JSONL logger bootstrap (relocated from
-  `phillipgreenii-nix-support-apps`'s `packages/jsonl-logger`).
-- `osdirs` — XDG state/config directory resolution with the `$HOME` fallback every consumer of
-  the two above needs.
-
-## Design
-
-See `phillipg-nix-repo-base`'s `docs/superpowers/specs/2026-08-25-go-support-design.md` for the
-full rationale, scope, and phased rollout plan.
+- **`jsonllogger`** — structured JSONL logging to a per-app log file. Use it when a CLI tool or
+  daemon needs a durable, appendable log file instead of plain stdout/stderr — for example, a
+  daemon whose logs should survive restarts and be tailed or shipped elsewhere.
+- **`osdirs`** — resolves an app's XDG state/config directory, falling back to `$HOME` when the
+  corresponding environment variable isn't set. Use it whenever a tool needs a per-app directory
+  under `~/.local/state` or `~/.config`.
 
 ## Testing
 
-`go test -race ./...` and `go vet ./...` (also run in CI on every push — see
-`.github/workflows/ci.yml`). This repo has no nix flake, so there is no `nix flake check` here;
-CI is the only gate.
+```
+go test -race ./...
+go vet ./...
+```
+
+Both also run in CI on every push (`.github/workflows/ci.yml`) — that's this repo's only gate;
+there's no nix flake here.
