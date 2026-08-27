@@ -1,1 +1,4 @@
 /dist/
+
+# claude-code git worktrees
+.worktrees/
