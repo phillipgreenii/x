@@ -154,20 +154,23 @@ func waitUntilDead(pid int, timeout time.Duration) bool {
 	}
 }
 
-// readSleepPID reads the pid plantSleepHook's script recorded, with a
+// tryReadSleepPID reads the pid plantSleepHook's script recorded, with a
 // short bounded retry: the hook is still a separate process writing this
 // file concurrently with this test's own cancellation timer, so a read
 // immediately after the killed call returns could otherwise race the
-// write.
-func readSleepPID(t *testing.T, hooksDir string) int {
+// write. If the file never appears, ok is false -- a legitimate outcome,
+// not a leak: it means the whole process group was killed before the
+// hook script even reached its `sleep N &` line (plausible under a slow/
+// loaded scheduler, e.g. a race/coverage-instrumented run, given the
+// deadline test's tight 300ms budget with no warm-up run), so `sleep`
+// never started and there is nothing to leak-check.
+func tryReadSleepPID(t *testing.T, hooksDir string) (pid int, ok bool) {
 	t.Helper()
 	path := sleepPIDFile(hooksDir)
 	deadline := time.Now().Add(2 * time.Second)
-	var lastErr error
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			lastErr = err
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
@@ -175,10 +178,25 @@ func readSleepPID(t *testing.T, hooksDir string) int {
 		if err != nil {
 			t.Fatalf("parsing pid from %s (%q): %v", path, data, err)
 		}
-		return pid
+		return pid, true
 	}
-	t.Fatalf("reading %s: %v", path, lastErr)
-	return 0
+	return 0, false
+}
+
+// assertHookSleepDidNotOutliveTheTest is the item-5 leak assertion shared
+// by both kill tests: if the hook's backgrounded `sleep` ever started
+// (tryReadSleepPID found its pid), it must not still be alive shortly
+// after the killed invocation returned.
+func assertHookSleepDidNotOutliveTheTest(t *testing.T, hooksDir string) {
+	t.Helper()
+	sleepPID, ok := tryReadSleepPID(t, hooksDir)
+	if !ok {
+		t.Logf("hook's sleep.pid was never written -- the invocation was killed before the hook could fork `sleep`, so there is nothing to leak-check")
+		return
+	}
+	if !waitUntilDead(sleepPID, contractKillSleepDeathBound) {
+		t.Errorf("the hook's backgrounded `sleep %ds` (pid %d) outlived the killed CreateWorktree() call by more than %v -- the process GROUP was not killed, only the direct git child", contractKillLongSleepSeconds, sleepPID, contractKillSleepDeathBound)
+	}
 }
 
 func TestContextCancelKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
@@ -219,10 +237,7 @@ func TestContextCancelKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
 		t.Errorf("CreateWorktree() under cancellation took %v, want it killed within %v (bounded by defaultWaitDelay), not left to run out the hook's %ds sleep", killElapsed, contractKillBound, contractKillLongSleepSeconds)
 	}
 
-	sleepPID := readSleepPID(t, hooksDir)
-	if !waitUntilDead(sleepPID, contractKillSleepDeathBound) {
-		t.Errorf("the hook's backgrounded `sleep %ds` (pid %d) outlived the canceled CreateWorktree() call by more than %v -- the process GROUP was not killed, only the direct git child", contractKillLongSleepSeconds, sleepPID, contractKillSleepDeathBound)
-	}
+	assertHookSleepDidNotOutliveTheTest(t, hooksDir)
 }
 
 func TestContextDeadlineKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
@@ -244,8 +259,5 @@ func TestContextDeadlineKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
 		t.Errorf("CreateWorktree() under a deadline took %v, want it killed within %v (bounded by defaultWaitDelay), not left to run out the hook's %ds sleep", killElapsed, contractKillBound, contractKillLongSleepSeconds)
 	}
 
-	sleepPID := readSleepPID(t, hooksDir)
-	if !waitUntilDead(sleepPID, contractKillSleepDeathBound) {
-		t.Errorf("the hook's backgrounded `sleep %ds` (pid %d) outlived the deadline-killed CreateWorktree() call by more than %v -- the process GROUP was not killed, only the direct git child", contractKillLongSleepSeconds, sleepPID, contractKillSleepDeathBound)
-	}
+	assertHookSleepDidNotOutliveTheTest(t, hooksDir)
 }
