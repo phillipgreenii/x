@@ -40,3 +40,7 @@ All three commands run in CI on every push (`.github/workflows/ci.yml`) — that
 gate; there's no nix flake here. The `integration`/`contract` suites need a real `git` binary on
 PATH (present on GitHub's `ubuntu-latest` runners); a consumer's own `nix flake check` never runs
 them — only this repo's own CI does.
+
+CI also runs a coverage gate (`.github/scripts/check-coverage.sh`): the whole-module aggregate
+coverage from `go test -race -tags=integration,contract -coverpkg=./...` (all three tiers'
+statements combined, not any single package's own view) must be at least 90.0%, or the job fails.
