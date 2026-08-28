@@ -3,8 +3,16 @@ package gitclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 )
+
+// trimTrailingNewline drops the single trailing newline git appends to
+// the one-line stdout of rev-parse/branch/config invocations -- the
+// idiom Toplevel, CommonDir, CurrentBranch, and RemoteURL each repeat.
+func trimTrailingNewline(s string) string {
+	return strings.TrimRight(s, "\n")
+}
 
 // Compile-time assertions that Client satisfies the four read-side role
 // interfaces this file implements. The mutating roles' assertions
@@ -25,7 +33,7 @@ func (c *Client) Toplevel(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	return trimTrailingNewline(string(out)), nil
 }
 
 // CommonDir runs `rev-parse --path-format=absolute --git-common-dir`
@@ -35,7 +43,7 @@ func (c *Client) CommonDir(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	return trimTrailingNewline(string(out)), nil
 }
 
 // CurrentBranch runs `branch --show-current` (currentBranchArgs). Empty
@@ -51,7 +59,7 @@ func (c *Client) CurrentBranch(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	branch := strings.TrimRight(string(out), "\n")
+	branch := trimTrailingNewline(string(out))
 	if branch == "" {
 		return "", ErrDetachedHEAD
 	}
@@ -71,13 +79,12 @@ func (c *Client) CurrentBranch(ctx context.Context) (string, error) {
 func (c *Client) RemoteURL(ctx context.Context, remote string) (string, error) {
 	out, err := c.run(ctx, remoteURLArgs(remote))
 	if err != nil {
-		var gitErr *GitError
-		if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+		if isExitCode(err, 1) {
 			return "", ErrNoRemote
 		}
 		return "", err
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	return trimTrailingNewline(string(out)), nil
 }
 
 // --- RefReader ---
@@ -94,8 +101,7 @@ func (c *Client) RefExists(ctx context.Context, ref string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	var gitErr *GitError
-	if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+	if isExitCode(err, 1) {
 		return false, nil
 	}
 	return false, err
@@ -184,8 +190,7 @@ func (c *Client) IsTracked(ctx context.Context, path string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	var gitErr *GitError
-	if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+	if isExitCode(err, 1) {
 		return false, nil
 	}
 	return false, err
@@ -194,8 +199,15 @@ func (c *Client) IsTracked(ctx context.Context, path string) (bool, error) {
 // --- HistoryReader ---
 
 // Commits runs `log -z --format=<logFormat>` (logArgs) built from opts
-// and parses the NUL-delimited output (parseCommits).
+// and parses the NUL-delimited output (parseCommits). opts.Limit MUST be
+// >= 0: only 0 is the documented "unlimited" sentinel (LogOptions' own
+// doc comment), and logArgs' `if opts.Limit > 0` guard means a negative
+// value would otherwise fall through silently treated as unlimited
+// rather than rejected -- so it is rejected here instead.
 func (c *Client) Commits(ctx context.Context, opts LogOptions) ([]Commit, error) {
+	if opts.Limit < 0 {
+		return nil, fmt.Errorf("gitclient: LogOptions.Limit must be >= 0 (0 means unlimited), got %d", opts.Limit)
+	}
 	out, err := c.run(ctx, logArgs(opts))
 	if err != nil {
 		return nil, err

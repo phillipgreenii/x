@@ -39,3 +39,14 @@ type GitError struct {
 func (e *GitError) Error() string {
 	return fmt.Sprintf("git %s: exit %d: %s", strings.Join(e.Args, " "), e.ExitCode, e.Stderr)
 }
+
+// isExitCode reports whether err is a *GitError with EXACTLY this exit
+// code -- the idiom RefExists, IsTracked, and RemoteURL each key on to
+// tell "the ordinary, documented negative case" apart from a genuine
+// failure that happens to share the same *GitError type. Deliberately
+// NOT used by HasUpstream, whose own doc comment explains why it must
+// fold in ANY exit code rather than one specific one.
+func isExitCode(err error, code int) bool {
+	var gitErr *GitError
+	return errors.As(err, &gitErr) && gitErr.ExitCode == code
+}

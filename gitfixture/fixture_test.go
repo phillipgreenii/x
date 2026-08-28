@@ -66,3 +66,40 @@ func TestWriteFileFailsWhenTargetIsADirectory(t *testing.T) {
 		t.Fatal("WriteFile() writing to a path that is a directory: error = nil, want an error")
 	}
 }
+
+// TestWriteFileRejectsRelEscapingTheFixtureRoot covers WriteFile's
+// containment check: package gitfixture's own doc comment claims
+// "hermetic by construction", so a rel that walks above the fixture
+// root via "../" components must be rejected rather than silently
+// writing outside repo.Dir.
+func TestWriteFileRejectsRelEscapingTheFixtureRoot(t *testing.T) {
+	ctx := t.Context()
+	repo, err := gitfixture.NewRepo(ctx, t.TempDir(), gitfixture.RepoOptions{Suite: "writefile-escape"})
+	if err != nil {
+		t.Fatalf("NewRepo() error = %v", err)
+	}
+
+	if err := repo.WriteFile("../../escape.txt", "content"); err == nil {
+		t.Fatal("WriteFile(\"../../escape.txt\"): error = nil, want the containment rejection")
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(repo.Dir)), "escape.txt")); statErr == nil {
+		t.Fatal("WriteFile(\"../../escape.txt\") was rejected but the escaping file was created anyway")
+	}
+}
+
+// TestAddBareRemoteRejectsNameEscapingTheFixtureRoot is AddBareRemote's
+// counterpart to TestWriteFileRejectsRelEscapingTheFixtureRoot: a remote
+// name that walks above the fixture's "remotes" directory via "../"
+// components must be rejected rather than nesting the new bare
+// repository outside the fixture tree.
+func TestAddBareRemoteRejectsNameEscapingTheFixtureRoot(t *testing.T) {
+	ctx := t.Context()
+	repo, err := gitfixture.NewRepo(ctx, t.TempDir(), gitfixture.RepoOptions{Suite: "addbareremote-escape"})
+	if err != nil {
+		t.Fatalf("NewRepo() error = %v", err)
+	}
+
+	if _, err := repo.AddBareRemote(ctx, "../../escape"); err == nil {
+		t.Fatal("AddBareRemote(\"../../escape\"): error = nil, want the containment rejection")
+	}
+}

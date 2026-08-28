@@ -622,6 +622,19 @@ func TestCommitsHonorsBaseHeadNoMergesAndLimit(t *testing.T) {
 	}
 }
 
+// TestCommitsRejectsNegativeLimit proves a negative LogOptions.Limit is
+// rejected outright rather than silently falling through logArgs' `if
+// opts.Limit > 0` guard and being treated as unlimited -- only 0 is the
+// documented unlimited sentinel (LogOptions' own doc comment).
+func TestCommitsRejectsNegativeLimit(t *testing.T) {
+	ctx := t.Context()
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "commits-negative-limit"})
+
+	if _, err := repo.Client.Commits(ctx, gitclient.LogOptions{Limit: -1}); err == nil {
+		t.Fatal("Commits(Limit: -1): error = nil, want a rejection")
+	}
+}
+
 // TestChangedFilesReportsAdditionsDeletionsAndBinary proves ChangedFiles'
 // merge-base ("...") semantics and both the ordinary numstat shape and the
 // binary-file "-\t-" shape against real git.

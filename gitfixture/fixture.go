@@ -19,9 +19,28 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/phillipgreenii/x/gitclient"
 )
+
+// containedPath joins rel onto root and rejects any result that would
+// escape root -- e.g. a rel of "../../etc/passwd" -- so WriteFile and
+// AddBareRemote cannot be used to touch a path outside the fixture tree.
+// No current caller passes such a rel/name, but the package's own
+// "hermetic by construction" doc comment (see the package doc above)
+// requires this to hold for any FUTURE caller too, not just today's.
+func containedPath(root, rel string) (string, error) {
+	joined := filepath.Join(root, rel)
+	relToRoot, err := filepath.Rel(root, joined)
+	if err != nil {
+		return "", fmt.Errorf("gitfixture: resolving %q relative to %s: %w", rel, root, err)
+	}
+	if relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("gitfixture: %q escapes the fixture root %s", rel, root)
+	}
+	return joined, nil
+}
 
 // RepoOptions configures NewRepo.
 type RepoOptions struct {
@@ -127,7 +146,10 @@ func NewRepo(ctx context.Context, root string, opts RepoOptions) (*Repo, error) 
 // or commit the file -- pair it with Client.Run("add", ...) directly, or
 // use Commit for the common write-stage-commit shape.
 func (r *Repo) WriteFile(rel, content string) error {
-	path := filepath.Join(r.Dir, rel)
+	path, err := containedPath(r.Dir, rel)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("gitfixture: creating parent directory for %s: %w", rel, err)
 	}
@@ -159,12 +181,19 @@ func (r *Repo) Commit(ctx context.Context, msg string, files map[string]string) 
 		if _, err := r.Client.Run(ctx, addArgs...); err != nil {
 			return "", fmt.Errorf("gitfixture: staging %v: %w", rels, err)
 		}
-		if _, err := r.Client.Run(ctx, "commit", "-m", msg); err != nil {
-			return "", fmt.Errorf("gitfixture: committing: %w", err)
+		// git's "nothing to commit, working tree clean" refusal --
+		// e.g. committing content byte-identical to what's already
+		// there -- prints to STDOUT, not stderr, so *GitError's own
+		// Stderr field is empty and unhelpful for this specific
+		// failure; folding stdout into the wrapped error too gives
+		// fixture authors the actual reason instead of an opaque,
+		// blank-looking one.
+		if out, err := r.Client.Run(ctx, "commit", "-m", msg); err != nil {
+			return "", fmt.Errorf("gitfixture: committing: %w (git stdout: %s)", err, strings.TrimSpace(string(out)))
 		}
 	} else {
-		if _, err := r.Client.Run(ctx, "commit", "-m", msg, "--allow-empty"); err != nil {
-			return "", fmt.Errorf("gitfixture: committing (empty): %w", err)
+		if out, err := r.Client.Run(ctx, "commit", "-m", msg, "--allow-empty"); err != nil {
+			return "", fmt.Errorf("gitfixture: committing (empty): %w (git stdout: %s)", err, strings.TrimSpace(string(out)))
 		}
 	}
 
@@ -172,11 +201,7 @@ func (r *Repo) Commit(ctx context.Context, msg string, files map[string]string) 
 	if err != nil {
 		return "", fmt.Errorf("gitfixture: resolving HEAD: %w", err)
 	}
-	sha := string(out)
-	for len(sha) > 0 && (sha[len(sha)-1] == '\n' || sha[len(sha)-1] == '\r') {
-		sha = sha[:len(sha)-1]
-	}
-	return sha, nil
+	return strings.TrimRight(string(out), "\r\n"), nil
 }
 
 // AddBareRemote creates a second, local bare repository nested under this
@@ -186,7 +211,10 @@ func (r *Repo) Commit(ctx context.Context, msg string, files map[string]string) 
 // returned Repo is that bare repository, usable as a "remote" for
 // Fetch-style tests.
 func (r *Repo) AddBareRemote(ctx context.Context, name string) (*Repo, error) {
-	remoteRoot := filepath.Join(r.root, "remotes", name)
+	remoteRoot, err := containedPath(filepath.Join(r.root, "remotes"), name)
+	if err != nil {
+		return nil, err
+	}
 	remote, err := NewRepo(ctx, remoteRoot, RepoOptions{
 		Suite: r.suite + "-remote-" + name,
 		Bare:  true,

@@ -107,6 +107,36 @@ func newAnchoredClient(anchor, gitPath string, cfg *config) *Client {
 	}
 }
 
+// setupAnchoredClient runs the buildClientConfig -> resolveAnchor ->
+// newAnchoredClient sequence New, Init, and Discover each need to turn
+// (dir, opts) into a ready Client -- factored out so the three
+// constructors share one place that gets it right rather than each
+// repeating it verbatim. Discover calls it twice (once to build the
+// probe client it runs --show-toplevel with, once more to anchor the
+// returned Client at the discovered toplevel).
+//
+// prepare, if non-nil, runs after opts are validated but before dir is
+// resolved -- Init's seam for its own os.MkdirAll, which MUST happen
+// only once opts are known-good (so a rejected option never has the
+// side effect of creating dir) and MUST happen before resolveAnchor
+// (which requires dir to already exist).
+func setupAnchoredClient(dir string, opts []Option, prepare func() error) (*Client, error) {
+	cfg, gitPath, err := buildClientConfig(opts)
+	if err != nil {
+		return nil, err
+	}
+	if prepare != nil {
+		if err := prepare(); err != nil {
+			return nil, err
+		}
+	}
+	anchor, err := resolveAnchor(dir)
+	if err != nil {
+		return nil, fmt.Errorf("gitclient: %s: %w", dir, err)
+	}
+	return newAnchoredClient(anchor, gitPath, cfg), nil
+}
+
 // New anchors a client at dir, which MUST be inside a git repository
 // (ErrNotARepository otherwise -- callers use that as the cheap "is this
 // a worktree?" probe, e.g. pr-pool's idempotent Ensure). Validation spawns
@@ -119,15 +149,10 @@ func newAnchoredClient(anchor, gitPath string, cfg *config) *Client {
 // bare repositories; unlike `--show-toplevel` it does not require a work
 // tree).
 func New(ctx context.Context, dir string, opts ...Option) (*Client, error) {
-	cfg, gitPath, err := buildClientConfig(opts)
+	c, err := setupAnchoredClient(dir, opts, nil)
 	if err != nil {
 		return nil, err
 	}
-	anchor, err := resolveAnchor(dir)
-	if err != nil {
-		return nil, fmt.Errorf("gitclient: %s: %w", dir, err)
-	}
-	c := newAnchoredClient(anchor, gitPath, cfg)
 
 	if _, err := c.run(ctx, commonDirArgs()); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -144,18 +169,15 @@ func New(ctx context.Context, dir string, opts ...Option) (*Client, error) {
 // ONE hermetic environment implementation rather than hand-rolling a
 // second.
 func Init(ctx context.Context, dir string, init InitOptions, opts ...Option) (*Client, error) {
-	cfg, gitPath, err := buildClientConfig(opts)
+	c, err := setupAnchoredClient(dir, opts, func() error {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("gitclient: creating %s: %w", dir, err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("gitclient: creating %s: %w", dir, err)
-	}
-	anchor, err := resolveAnchor(dir)
-	if err != nil {
-		return nil, fmt.Errorf("gitclient: %s: %w", dir, err)
-	}
-	c := newAnchoredClient(anchor, gitPath, cfg)
 
 	branch := init.InitialBranch
 	if branch == "" {
@@ -179,15 +201,10 @@ func Init(ctx context.Context, dir string, init InitOptions, opts ...Option) (*C
 // discovery: `rev-parse --show-toplevel` run with dir as the working
 // directory performs it, so Discover need not reimplement it.
 func Discover(ctx context.Context, dir string, opts ...Option) (*Client, error) {
-	cfg, gitPath, err := buildClientConfig(opts)
+	probe, err := setupAnchoredClient(dir, opts, nil)
 	if err != nil {
 		return nil, err
 	}
-	anchor, err := resolveAnchor(dir)
-	if err != nil {
-		return nil, fmt.Errorf("gitclient: %s: %w", dir, err)
-	}
-	probe := newAnchoredClient(anchor, gitPath, cfg)
 
 	out, err := probe.run(ctx, toplevelArgs())
 	if err != nil {
@@ -198,11 +215,7 @@ func Discover(ctx context.Context, dir string, opts ...Option) (*Client, error) 
 	}
 
 	toplevel := strings.TrimRight(string(out), "\n")
-	resolvedTop, err := resolveAnchor(toplevel)
-	if err != nil {
-		return nil, fmt.Errorf("gitclient: %s: %w", toplevel, err)
-	}
-	return newAnchoredClient(resolvedTop, gitPath, cfg), nil
+	return setupAnchoredClient(toplevel, opts, nil)
 }
 
 // Run executes git with the client's anchor and environment -- the escape

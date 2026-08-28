@@ -25,7 +25,14 @@ import (
 // containing a literal space passes through as one token intact -- there
 // is no whitespace field separator to trip over.
 func parseStatus(data []byte) ([]StatusEntry, error) {
-	var entries []StatusEntry
+	// Capacity hint only, like parseCommits'/parseNumstat's own
+	// preallocation: a status record's shortest possible on-wire shape
+	// (2 status bytes, 1 separator space, a 1-byte path, its
+	// terminating NUL) is minRecordEstimateBytes long, so len(data)/
+	// minRecordEstimateBytes is a safe upper bound on the entry count --
+	// a wrong guess just costs one extra slice growth, never correctness.
+	const minRecordEstimateBytes = 4
+	entries := make([]StatusEntry, 0, len(data)/minRecordEstimateBytes)
 	i := 0
 	n := len(data)
 	for i < n {
@@ -169,7 +176,12 @@ func parseUnixSeconds(s string) (time.Time, error) {
 // compacts into a "dir/{old => new}" descriptor that -z mode does NOT
 // produce -- -z always gives full, separate paths).
 func parseNumstat(data []byte) ([]FileChange, error) {
-	var changes []FileChange
+	// Capacity hint only (see parseStatus' identical reasoning): a
+	// numstat record's shortest possible on-wire shape ("0\t0\t" plus a
+	// 1-byte path and its terminating NUL) is minRecordEstimateBytes
+	// long, so len(data)/minRecordEstimateBytes is a safe upper bound.
+	const minRecordEstimateBytes = 6
+	changes := make([]FileChange, 0, len(data)/minRecordEstimateBytes)
 	i := 0
 	n := len(data)
 	for i < n {
