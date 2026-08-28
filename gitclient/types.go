@@ -8,10 +8,11 @@
 // It also ships Client (client.go, bead pg2-svfbb.2): the anchored,
 // hermetic CLI-backed spawn mechanics -- constructors New/Init/Discover
 // and the Run escape hatch, plus the context-cancellation contract every
-// git-spawning call honors. Client's role-interface method
-// implementations (Locator, RefReader, ...) and the compile-time
-// interface-satisfaction assertions land in the follow-up
-// role-implementation beads (pg2-svfbb.4, pg2-svfbb.5).
+// git-spawning call honors. Client's mutating role-interface method
+// implementations (Fetcher, WorktreeManager, BranchManager, Cleaner) and
+// their compile-time interface-satisfaction assertions live in mutate.go
+// (bead pg2-svfbb.5); the read-side roles (Locator, RefReader,
+// StatusReader, HistoryReader) land in the follow-up bead pg2-svfbb.4.
 //
 // Design of record: the DESIGN field of epic bead pg2-svfbb (operator
 // ruling 2026-08-27: the design lives in the bead, not committed to this

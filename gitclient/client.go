@@ -26,11 +26,13 @@ const defaultWaitDelay = 5 * time.Second
 // child environment are fixed at construction; a Client holds no per-call
 // state and is safe for concurrent use.
 //
-// The role-interface method implementations themselves, and the
-// compile-time interface-satisfaction assertions, land in the
-// role-implementation beads (pg2-svfbb.4, pg2-svfbb.5) -- this type
-// currently offers only its constructors, the Run escape hatch, and the
-// spawn/context-contract plumbing they share (bead pg2-svfbb.2).
+// The mutating role-interface method implementations (Fetcher,
+// WorktreeManager, BranchManager, Cleaner) and their compile-time
+// interface-satisfaction assertions live in mutate.go (bead pg2-svfbb.5);
+// the read-side roles (Locator, RefReader, StatusReader, HistoryReader)
+// land in the follow-up bead pg2-svfbb.4. This file offers the
+// constructors, the Run escape hatch, and the spawn/context-contract
+// plumbing they all share (bead pg2-svfbb.2).
 type Client struct {
 	dir     string // absolute, symlink-resolved anchor (design §4.4 D2)
 	gitPath string // resolved git binary: WithGit override, else exec.LookPath at construction
