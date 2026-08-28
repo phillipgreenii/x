@@ -30,9 +30,9 @@ const defaultWaitDelay = 5 * time.Second
 // WorktreeManager, BranchManager, Cleaner) and their compile-time
 // interface-satisfaction assertions live in mutate.go (bead pg2-svfbb.5);
 // the read-side roles (Locator, RefReader, StatusReader, HistoryReader)
-// land in the follow-up bead pg2-svfbb.4. This file offers the
-// constructors, the Run escape hatch, and the spawn/context-contract
-// plumbing they all share (bead pg2-svfbb.2).
+// and their assertions live in read.go (bead pg2-svfbb.4). This file
+// offers the constructors, the Run escape hatch, and the
+// spawn/context-contract plumbing they all share (bead pg2-svfbb.2).
 type Client struct {
 	dir     string // absolute, symlink-resolved anchor (design §4.4 D2)
 	gitPath string // resolved git binary: WithGit override, else exec.LookPath at construction

@@ -12,7 +12,8 @@
 // implementations (Fetcher, WorktreeManager, BranchManager, Cleaner) and
 // their compile-time interface-satisfaction assertions live in mutate.go
 // (bead pg2-svfbb.5); the read-side roles (Locator, RefReader,
-// StatusReader, HistoryReader) land in the follow-up bead pg2-svfbb.4.
+// StatusReader, HistoryReader) and their assertions live in read.go
+// (bead pg2-svfbb.4).
 //
 // Design of record: the DESIGN field of epic bead pg2-svfbb (operator
 // ruling 2026-08-27: the design lives in the bead, not committed to this

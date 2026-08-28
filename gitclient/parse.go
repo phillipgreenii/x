@@ -65,7 +65,19 @@ func parseStatus(data []byte) ([]StatusEntry, error) {
 // expansion instead of appending a newline, so the whole invocation's
 // stdout is one flat NUL-delimited stream, chunked in groups of
 // logFieldsPerCommit.
-const logFormat = "%H\x00%s\x00%b\x00%an\x00%ae\x00%at\x00%cn\x00%ce\x00%ct"
+//
+// The separator between fields MUST be git's own "%x00" pretty-format
+// placeholder (four printable ASCII characters: %, x, 0, 0) rather than a
+// literal embedded NUL byte in this Go string. This is not stylistic: a
+// literal NUL inside one argv element is not representable in a POSIX
+// argv (C strings are NUL-terminated), so passing it to exec fails with
+// "invalid argument" at the syscall layer -- confirmed behaviorally
+// against real git 2.54.0 running `log -z --format=...`. "%x00" is a
+// format-string ESCAPE that git itself expands into a raw NUL byte when
+// producing its OUTPUT, so parseCommits' expectation of literal NUL
+// bytes in the parsed stdout is unaffected; only the ARGUMENT string
+// changes.
+const logFormat = "%H%x00%s%x00%b%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct"
 
 // logFieldsPerCommit is the number of NUL-separated fields logFormat emits
 // per commit: SHA, Subject, Body, AuthorName, AuthorEmail, AuthorWhen,

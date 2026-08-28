@@ -4,8 +4,8 @@ import "context"
 
 // Compile-time assertions that Client satisfies the four mutating role
 // interfaces this file implements. The read-side roles' assertions
-// (Locator, RefReader, StatusReader, HistoryReader) land with their own
-// method implementations in bead pg2-svfbb.4.
+// (Locator, RefReader, StatusReader, HistoryReader) live with their own
+// method implementations in read.go (bead pg2-svfbb.4).
 var (
 	_ Fetcher         = (*Client)(nil)
 	_ WorktreeManager = (*Client)(nil)

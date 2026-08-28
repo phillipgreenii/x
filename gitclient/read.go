@@ -1,0 +1,189 @@
+package gitclient
+
+import (
+	"context"
+	"errors"
+	"strings"
+)
+
+// Compile-time assertions that Client satisfies the four read-side role
+// interfaces this file implements. The mutating roles' assertions
+// (Fetcher, WorktreeManager, BranchManager, Cleaner) live in mutate.go
+// (bead pg2-svfbb.5).
+var (
+	_ Locator       = (*Client)(nil)
+	_ RefReader     = (*Client)(nil)
+	_ StatusReader  = (*Client)(nil)
+	_ HistoryReader = (*Client)(nil)
+)
+
+// --- Locator ---
+
+// Toplevel runs `rev-parse --show-toplevel` (toplevelArgs).
+func (c *Client) Toplevel(ctx context.Context) (string, error) {
+	out, err := c.run(ctx, toplevelArgs())
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(out), "\n"), nil
+}
+
+// CommonDir runs `rev-parse --path-format=absolute --git-common-dir`
+// (commonDirArgs).
+func (c *Client) CommonDir(ctx context.Context) (string, error) {
+	out, err := c.run(ctx, commonDirArgs())
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(out), "\n"), nil
+}
+
+// CurrentBranch runs `branch --show-current` (currentBranchArgs). Empty
+// stdout on a SUCCESSFUL invocation (exit 0) means HEAD does not point at
+// a branch -- ErrDetachedHEAD -- verified behaviorally against real git
+// 2.54.0: an unborn HEAD (a freshly `git init`ed repository with zero
+// commits) still prints the initial branch name (e.g. "main"), so an
+// empty unborn HEAD is NOT mistaken for the detached case; only a
+// genuinely detached checkout (`git checkout <sha>`) produces empty
+// stdout.
+func (c *Client) CurrentBranch(ctx context.Context) (string, error) {
+	out, err := c.run(ctx, currentBranchArgs())
+	if err != nil {
+		return "", err
+	}
+	branch := strings.TrimRight(string(out), "\n")
+	if branch == "" {
+		return "", ErrDetachedHEAD
+	}
+	return branch, nil
+}
+
+// RemoteURL runs `config --get remote.<remote>.url` (remoteURLArgs) -- a
+// RAW config read, deliberately not `remote get-url`, which would
+// additionally expand insteadOf rewrites (see the doc note on
+// Locator.RemoteURL in interfaces.go). Verified behaviorally against real
+// git: `config --get` exits 1 with empty stdout when the key is not
+// configured at all; that specific exit code is mapped to ErrNoRemote
+// here rather than in classify (see classify.go's doc comment -- this is
+// one of the two sentinels classify deliberately does not know about).
+// Any other non-zero exit is a genuine error and propagates unmodified as
+// a *GitError.
+func (c *Client) RemoteURL(ctx context.Context, remote string) (string, error) {
+	out, err := c.run(ctx, remoteURLArgs(remote))
+	if err != nil {
+		var gitErr *GitError
+		if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+			return "", ErrNoRemote
+		}
+		return "", err
+	}
+	return strings.TrimRight(string(out), "\n"), nil
+}
+
+// --- RefReader ---
+
+// RefExists runs `rev-parse --verify --quiet <ref>^{commit}`
+// (refExistsArgs). Verified behaviorally against real git: exit 0 means
+// the ref resolves to a commit; exit 1 (with --quiet suppressing git's
+// own error message on the ordinary "doesn't exist" case -- though a
+// same-exit-code "wrong object type" mismatch can still print to stderr
+// despite --quiet) means it does not; any other exit code is a genuine
+// error and propagates as a *GitError.
+func (c *Client) RefExists(ctx context.Context, ref string) (bool, error) {
+	_, err := c.run(ctx, refExistsArgs(ref))
+	if err == nil {
+		return true, nil
+	}
+	var gitErr *GitError
+	if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
+// HasUpstream runs `rev-parse @{u}` (hasUpstreamArgs). Verified
+// behaviorally against real git 2.54.0: every failure mode this
+// invocation can hit -- no upstream configured, an unborn HEAD, a
+// detached HEAD, and an upstream configured but not stored as a
+// remote-tracking branch -- exits 128 with a "fatal: ..." message; there
+// is no distinct exit code separating "no upstream" from git's other
+// fatal conditions for this specific invocation, unlike RefExists/
+// IsTracked's genuinely distinct exit 1. So any ordinary git failure (a
+// *GitError) here is reported as false ("no upstream"); only a non-git
+// failure -- context cancellation/deadline, or a spawn error, per run's
+// own contract -- propagates as an error.
+func (c *Client) HasUpstream(ctx context.Context) (bool, error) {
+	_, err := c.run(ctx, hasUpstreamArgs())
+	if err == nil {
+		return true, nil
+	}
+	var gitErr *GitError
+	if errors.As(err, &gitErr) {
+		return false, nil
+	}
+	return false, err
+}
+
+// CommitsAhead runs `rev-list --count <base>..<tip>` (commitsAheadArgs)
+// and parses the integer count from stdout (parseCount).
+func (c *Client) CommitsAhead(ctx context.Context, base, tip string) (int, error) {
+	out, err := c.run(ctx, commitsAheadArgs(base, tip))
+	if err != nil {
+		return 0, err
+	}
+	return parseCount(out)
+}
+
+// --- StatusReader ---
+
+// Status runs `status --porcelain=v1 -z` (statusArgs) and parses the
+// NUL-delimited output (parseStatus), including the reversed-order
+// rename/copy record (new path, then original path).
+func (c *Client) Status(ctx context.Context) ([]StatusEntry, error) {
+	out, err := c.run(ctx, statusArgs())
+	if err != nil {
+		return nil, err
+	}
+	return parseStatus(out)
+}
+
+// IsTracked runs `ls-files --error-unmatch <path>` (isTrackedArgs).
+// Verified behaviorally against real git: exit 0 means the path is
+// tracked; exit 1 ("pathspec ... did not match any file(s) known to
+// git") means it is not; any other exit code (e.g. 128 for a path
+// outside the repository) is a genuine error and propagates as a
+// *GitError.
+func (c *Client) IsTracked(ctx context.Context, path string) (bool, error) {
+	_, err := c.run(ctx, isTrackedArgs(path))
+	if err == nil {
+		return true, nil
+	}
+	var gitErr *GitError
+	if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
+// --- HistoryReader ---
+
+// Commits runs `log -z --format=<logFormat>` (logArgs) built from opts
+// and parses the NUL-delimited output (parseCommits).
+func (c *Client) Commits(ctx context.Context, opts LogOptions) ([]Commit, error) {
+	out, err := c.run(ctx, logArgs(opts))
+	if err != nil {
+		return nil, err
+	}
+	return parseCommits(out)
+}
+
+// ChangedFiles runs `diff --numstat <base>...HEAD` (numstatArgs --
+// merge-base ("...") semantics per the interface doc comment) and parses
+// the tab-delimited output (parseNumstat).
+func (c *Client) ChangedFiles(ctx context.Context, base string) ([]FileChange, error) {
+	out, err := c.run(ctx, numstatArgs(base))
+	if err != nil {
+		return nil, err
+	}
+	return parseNumstat(out)
+}
