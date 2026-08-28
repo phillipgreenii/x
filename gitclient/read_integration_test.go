@@ -11,6 +11,7 @@ package gitclient_test
 // internal gitclient test file would be an import cycle.
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -676,5 +677,50 @@ func TestNewAtANonRepositoryPathReturnsErrNotARepository(t *testing.T) {
 	_, err := gitclient.New(ctx, t.TempDir())
 	if !errors.Is(err, gitclient.ErrNotARepository) {
 		t.Errorf("New() at a non-repository path: error = %v, want errors.Is(_, ErrNotARepository)", err)
+	}
+}
+
+// TestReadMethodsPropagateAnAlreadyCanceledContext proves every read-side
+// method's GENERIC c.run error-passthrough branch -- as distinct from the
+// specific sentinel-mapping branches the tests above already cover
+// (ErrDetachedHEAD, ErrNoRemote, the false-on-exit-1 shapes) -- by forcing
+// c.run to fail via an already-canceled context rather than a real git
+// exit code. TestRunWrapsAnAlreadyCanceledContext (client_test.go) already
+// proves this mechanism produces errors.Is(err, context.Canceled) for the
+// Run escape hatch; here every read-side role method is checked the same
+// way, since each has its own "if err != nil { return ..., err }" wrapper
+// that TestRefExistsTrueForAnExistingCommitFalseForAMissingOne and its
+// siblings never reach (they only ever see a nil error or a *GitError with
+// a specific exit code, never a non-git error like this one).
+func TestReadMethodsPropagateAnAlreadyCanceledContext(t *testing.T) {
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "canceled-context"})
+	if _, err := repo.Commit(t.Context(), "seed", map[string]string{"a.txt": "hello\n"}); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	sha := revParse(t, t.Context(), repo.Client, "HEAD")
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{"Toplevel", func() error { _, err := repo.Client.Toplevel(canceled); return err }},
+		{"CommonDir", func() error { _, err := repo.Client.CommonDir(canceled); return err }},
+		{"CurrentBranch", func() error { _, err := repo.Client.CurrentBranch(canceled); return err }},
+		{"RemoteURL", func() error { _, err := repo.Client.RemoteURL(canceled, "origin"); return err }},
+		{"RefExists", func() error { _, err := repo.Client.RefExists(canceled, sha); return err }},
+		{"HasUpstream", func() error { _, err := repo.Client.HasUpstream(canceled); return err }},
+		{"CommitsAhead", func() error { _, err := repo.Client.CommitsAhead(canceled, sha, sha); return err }},
+		{"Status", func() error { _, err := repo.Client.Status(canceled); return err }},
+		{"IsTracked", func() error { _, err := repo.Client.IsTracked(canceled, "a.txt"); return err }},
+		{"Commits", func() error { _, err := repo.Client.Commits(canceled, gitclient.LogOptions{}); return err }},
+		{"ChangedFiles", func() error { _, err := repo.Client.ChangedFiles(canceled, sha); return err }},
+	}
+	for _, c := range checks {
+		if err := c.call(); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s(canceled context) error = %v, want errors.Is(_, context.Canceled)", c.name, err)
+		}
 	}
 }

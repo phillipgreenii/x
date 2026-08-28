@@ -105,6 +105,22 @@ func TestParseCommitsBadTimestampErrors(t *testing.T) {
 	}
 }
 
+// TestParseCommitsBadCommitterTimestampErrors is the committer-date
+// counterpart to TestParseCommitsBadTimestampErrors, which only ever
+// exercises a bad AUTHOR date -- the author date is parsed first and
+// returns immediately on error, so a bad committer date behind a VALID
+// author date is a distinct, otherwise-unreached branch.
+func TestParseCommitsBadCommitterTimestampErrors(t *testing.T) {
+	data := []byte(nulRecord(
+		"sha", "subject", "body",
+		"author", "author@example.com", "1700000000",
+		"committer", "committer@example.com", "not-a-number",
+	))
+	if _, err := parseCommits(data); err == nil {
+		t.Fatal("expected an error for a non-numeric committer date")
+	}
+}
+
 func TestLogArgsDefaults(t *testing.T) {
 	v := logArgs(LogOptions{})
 	want := []string{"log", "-z", "--format=" + logFormat, "HEAD"}
@@ -138,6 +154,24 @@ func TestLogArgsFilters(t *testing.T) {
 	})
 	joined := strings.Join(v.Args, " ")
 	for _, want := range []string{"--no-merges", "--author=alice", "--author=bob", "-n 5", "-- foo.go bar.go"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("logArgs args %v missing %q", v.Args, want)
+		}
+	}
+}
+
+// TestLogArgsSinceAndUntil covers the two time-window filters, formatted as
+// RFC3339 -- neither NoMerges/Authors/Limit/Paths (TestLogArgsFilters) nor
+// the zero-value default (TestLogArgsDefaults) exercises them.
+func TestLogArgsSinceAndUntil(t *testing.T) {
+	since := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	until := time.Date(2024, 6, 7, 8, 9, 10, 0, time.UTC)
+	v := logArgs(LogOptions{Since: since, Until: until})
+	joined := strings.Join(v.Args, " ")
+	for _, want := range []string{
+		"--since=" + since.Format(time.RFC3339),
+		"--until=" + until.Format(time.RFC3339),
+	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("logArgs args %v missing %q", v.Args, want)
 		}

@@ -72,6 +72,17 @@ func TestParseNumstatNonNumericCountErrors(t *testing.T) {
 	}
 }
 
+// TestParseNumstatNonNumericDeletionCountErrors is the deletions-specific
+// counterpart to TestParseNumstatNonNumericCountErrors, which makes BOTH
+// the additions and deletions fields non-numeric -- additions is parsed
+// first and returns immediately on error, so a bad deletions count behind a
+// VALID additions count is a distinct, otherwise-unreached branch.
+func TestParseNumstatNonNumericDeletionCountErrors(t *testing.T) {
+	if _, err := parseNumstat([]byte("3\ty\tfoo.go\n")); err == nil {
+		t.Fatal("expected an error for a non-numeric deletion count")
+	}
+}
+
 func TestNumstatArgs(t *testing.T) {
 	v := numstatArgs("main")
 	want := []string{"diff", "--numstat", "main...HEAD"}

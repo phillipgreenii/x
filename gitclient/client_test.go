@@ -239,3 +239,142 @@ func TestRunWrapsAnAlreadyExpiredDeadline(t *testing.T) {
 		t.Errorf("Run() error = %v, want errors.Is(_, context.DeadlineExceeded)", err)
 	}
 }
+
+// TestRunWrapsANonExitSpawnError covers run's final fallback branch: a
+// runErr that is neither a context error (TestRunWrapsAnAlreadyCanceled
+// Context/...ExpiredDeadline) nor an *exec.ExitError (the ordinary
+// classify path every other test drives) -- a genuine spawn failure, here
+// forced by pointing gitPath at a directory rather than an executable.
+func TestRunWrapsANonExitSpawnError(t *testing.T) {
+	c := &Client{dir: t.TempDir(), gitPath: t.TempDir()}
+	_, err := c.run(t.Context(), verbArgs{Args: []string{"status"}, Parsed: false})
+	if err == nil {
+		t.Fatal("run() error = nil, want a spawn error (gitPath is a directory, not an executable)")
+	}
+	var gitErr *GitError
+	if errors.As(err, &gitErr) {
+		t.Errorf("run() error = %v (*GitError), want a non-GitError spawn error", err)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("run() error = %v, want a spawn error, not a context error", err)
+	}
+}
+
+// TestBuildClientConfigWhenGitNotOnPATHReturnsAnError covers
+// buildClientConfig's exec.LookPath failure branch: with no WithGit
+// override and no "git" resolvable on PATH, construction must fail rather
+// than silently proceeding with an empty gitPath.
+func TestBuildClientConfigWhenGitNotOnPATHReturnsAnError(t *testing.T) {
+	t.Setenv("PATH", "")
+	_, _, err := buildClientConfig(nil)
+	if err == nil {
+		t.Fatal("buildClientConfig(nil) error = nil, want an error resolving the git binary")
+	}
+	if !strings.Contains(err.Error(), "resolving git binary") {
+		t.Errorf("buildClientConfig(nil) error = %v, want it to mention resolving the git binary", err)
+	}
+}
+
+// TestNewOnANonExistentDirReturnsAWrappedResolveError covers New's own
+// resolveAnchor error-wrapping branch -- distinct from
+// TestNewOnNonRepositoryReturnsErrNotARepository, which uses an EXISTING
+// (but non-repository) directory and so never reaches resolveAnchor's own
+// failure mode: a dir that does not exist at all, so
+// filepath.EvalSymlinks fails before git is ever invoked.
+func TestNewOnANonExistentDirReturnsAWrappedResolveError(t *testing.T) {
+	ctx := t.Context()
+	missing := filepath.Join(t.TempDir(), "does", "not", "exist")
+	_, err := New(ctx, missing)
+	if err == nil {
+		t.Fatal("New() on a non-existent dir: error = nil, want an error")
+	}
+	if errors.Is(err, ErrNotARepository) {
+		t.Errorf("New() on a non-existent dir: error = %v, want a resolveAnchor error, not ErrNotARepository", err)
+	}
+}
+
+// TestInitSurfacesARejectedOption is Init's counterpart to
+// TestNewSurfacesARejectedOptionRatherThanMaskingIt: buildClientConfig's
+// error must surface directly rather than being swallowed.
+func TestInitSurfacesARejectedOption(t *testing.T) {
+	ctx := t.Context()
+	_, err := Init(ctx, t.TempDir(), InitOptions{}, WithCeiling(""))
+	if err == nil {
+		t.Fatal("Init() error = nil, want the WithCeiling rejection")
+	}
+}
+
+// TestInitFailsWhenAParentPathComponentIsAFile covers Init's os.MkdirAll
+// error branch: dir's parent segment already exists as a regular file, so
+// MkdirAll cannot create dir underneath it.
+func TestInitFailsWhenAParentPathComponentIsAFile(t *testing.T) {
+	ctx := t.Context()
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", blocker, err)
+	}
+
+	_, err := Init(ctx, filepath.Join(blocker, "repo"), InitOptions{})
+	if err == nil {
+		t.Fatal("Init() under a file (not a directory): error = nil, want an error")
+	}
+}
+
+// TestInitRejectsAnInvalidInitialBranchName covers Init's c.run(git init)
+// error branch: real git rejects an initial branch name containing a
+// space ("fatal: invalid initial branch name"), verified behaviorally.
+func TestInitRejectsAnInvalidInitialBranchName(t *testing.T) {
+	ctx := t.Context()
+	_, err := Init(ctx, t.TempDir(), InitOptions{InitialBranch: "bad branch name"})
+	if err == nil {
+		t.Fatal("Init() with an invalid initial branch name: error = nil, want git's rejection")
+	}
+}
+
+// TestDiscoverSurfacesARejectedOption is Discover's counterpart to
+// TestNewSurfacesARejectedOptionRatherThanMaskingIt.
+func TestDiscoverSurfacesARejectedOption(t *testing.T) {
+	ctx := t.Context()
+	_, err := Discover(ctx, t.TempDir(), WithCeiling(""))
+	if err == nil {
+		t.Fatal("Discover() error = nil, want the WithCeiling rejection")
+	}
+	if errors.Is(err, ErrNotARepository) {
+		t.Errorf("Discover() error = %v, want the option error surfaced directly, not masked as ErrNotARepository", err)
+	}
+}
+
+// TestDiscoverOnANonExistentDirReturnsAWrappedResolveError is Discover's
+// counterpart to TestNewOnANonExistentDirReturnsAWrappedResolveError.
+func TestDiscoverOnANonExistentDirReturnsAWrappedResolveError(t *testing.T) {
+	ctx := t.Context()
+	missing := filepath.Join(t.TempDir(), "does", "not", "exist")
+	_, err := Discover(ctx, missing)
+	if err == nil {
+		t.Fatal("Discover() on a non-existent dir: error = nil, want an error")
+	}
+	if errors.Is(err, ErrNotARepository) {
+		t.Errorf("Discover() on a non-existent dir: error = %v, want a resolveAnchor error, not ErrNotARepository", err)
+	}
+}
+
+// TestDiscoverPropagatesAnAlreadyCanceledContext covers Discover's OWN
+// context-error branch (probe.run's ctx.Canceled/DeadlineExceeded check),
+// distinct from TestDiscoverOnNonRepositoryReturnsErrNotARepository's
+// ordinary git-failure branch: with a real repository to discover from but
+// an already-canceled context, Discover must propagate context.Canceled
+// rather than masking it as ErrNotARepository.
+func TestDiscoverPropagatesAnAlreadyCanceledContext(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Init(t.Context(), dir, InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := Discover(ctx, dir)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Discover() error = %v, want errors.Is(_, context.Canceled)", err)
+	}
+}
