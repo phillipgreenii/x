@@ -5,11 +5,13 @@
 // environment-allowlist builder and functional Options, and the classify
 // exit-code-to-error seam.
 //
-// This package currently ships ONLY those pure pieces -- no subprocess is
-// spawned anywhere in it, and there is no exported Client yet. The
-// CLI-backed implementation of every interface here, together with its
-// constructors (New/Init/Discover) and the Run escape hatch, lands in a
-// follow-up change (bead pg2-svfbb.2).
+// It also ships Client (client.go, bead pg2-svfbb.2): the anchored,
+// hermetic CLI-backed spawn mechanics -- constructors New/Init/Discover
+// and the Run escape hatch, plus the context-cancellation contract every
+// git-spawning call honors. Client's role-interface method
+// implementations (Locator, RefReader, ...) and the compile-time
+// interface-satisfaction assertions land in the follow-up
+// role-implementation beads (pg2-svfbb.4, pg2-svfbb.5).
 //
 // Design of record: the DESIGN field of epic bead pg2-svfbb (operator
 // ruling 2026-08-27: the design lives in the bead, not committed to this
