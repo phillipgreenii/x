@@ -118,11 +118,16 @@ func logArgs(opts LogOptions) verbArgs {
 	return verbArgs{Args: args, Parsed: true}
 }
 
-// numstatArgs builds `diff --numstat <base>...HEAD`
+// numstatArgs builds `diff --numstat -z <base>...HEAD`
 // (HistoryReader.ChangedFiles) -- merge-base ("...") semantics per the
-// interface doc comment.
+// interface doc comment. -z avoids core.quotepath's C-quoting/octal-
+// escaping of non-ASCII paths (the same reason statusArgs/logArgs use it)
+// -- but -z also changes a *rename* record's shape: the third
+// (tab-delimited) field is EMPTY and two NUL-terminated path fields (old,
+// then new -- NOT reversed, unlike status -z's rename record) follow it.
+// parseNumstat decodes that shape.
 func numstatArgs(base string) verbArgs {
-	return verbArgs{Args: []string{"diff", "--numstat", base + "...HEAD"}, Parsed: true}
+	return verbArgs{Args: []string{"diff", "--numstat", "-z", base + "...HEAD"}, Parsed: true}
 }
 
 // --- Fetcher ---

@@ -38,9 +38,13 @@ type Commit struct {
 	Committer Signature // Committer.When is the %ct recency pg-go-mutate-tui reads
 }
 
-// FileChange is one line of `git diff --numstat`.
+// FileChange is one line of `git diff --numstat -z`. For a rename/copy
+// (git detects these by default, no flag required -- see numstatArgs/
+// parseNumstat), Path is the NEW path and OrigPath is the ORIGINAL path;
+// OrigPath is set only in that case, mirroring StatusEntry.OrigPath.
 type FileChange struct {
 	Path      string
+	OrigPath  string // set only for renames/copies
 	Additions int
 	Deletions int
 	Binary    bool

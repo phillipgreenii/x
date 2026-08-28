@@ -101,17 +101,43 @@ func (c *Client) RefExists(ctx context.Context, ref string) (bool, error) {
 	return false, err
 }
 
-// HasUpstream runs `rev-parse @{u}` (hasUpstreamArgs). Verified
-// behaviorally against real git 2.54.0: every failure mode this
-// invocation can hit -- no upstream configured, an unborn HEAD, a
-// detached HEAD, and an upstream configured but not stored as a
-// remote-tracking branch -- exits 128 with a "fatal: ..." message; there
-// is no distinct exit code separating "no upstream" from git's other
-// fatal conditions for this specific invocation, unlike RefExists/
-// IsTracked's genuinely distinct exit 1. So any ordinary git failure (a
-// *GitError) here is reported as false ("no upstream"); only a non-git
-// failure -- context cancellation/deadline, or a spawn error, per run's
-// own contract -- propagates as an error.
+// HasUpstream runs `rev-parse @{u}` (hasUpstreamArgs).
+//
+// This is a DELIBERATE, DOCUMENTED design tradeoff, not an unexplained
+// inconsistency with RefExists/IsTracked (each of which keys on one
+// specific, genuinely distinct exit code): re-verified behaviorally
+// against real git 2.54.0 (pg2-i0q71) across every failure mode this
+// specific invocation can hit --
+//
+//   - no upstream configured at all ("fatal: no upstream configured for
+//     branch '<name>'")
+//   - an unborn HEAD ("fatal: no such branch: '<name>'")
+//   - a detached HEAD ("fatal: HEAD does not point to a branch")
+//   - an upstream naming a remote that was never configured, i.e. "not
+//     stored as a remote-tracking branch" ("fatal: upstream branch
+//     '<ref>' not stored as a remote-tracking branch")
+//   - a dangling upstream config -- branch.<name>.merge pointing at a
+//     ref with no corresponding remote-tracking ref, e.g. because the
+//     remote branch was deleted after tracking was set up ("fatal:
+//     ambiguous argument '@{u}': unknown revision or path not in the
+//     working tree.")
+//
+// -- every one of these exits 128 with a different "fatal: ..." message.
+// Unlike `rev-parse --verify --quiet <ref>^{commit}` (RefExists), there
+// is no `--quiet`/`--verify` form of upstream ("@{u}") expansion: any
+// resolution failure is always git's generic fatal-error exit, so exit
+// code alone cannot separate "no upstream" from a hypothetical future
+// fatal condition (e.g. ref-store corruption) hitting the same
+// expansion. Keying on stderr text instead would just trade one
+// fragility for another: classify.go's own doc comment already commits
+// this package to never matching localized/version-specific stderr text,
+// and the four DISTINCT messages above show there is no single stable
+// substring that would even cover just the "no upstream" cases without
+// also matching messages from unrelated causes. So, deliberately: any
+// ordinary git failure (a *GitError, any exit code) here is reported as
+// false ("no upstream"); only a non-git failure -- context
+// cancellation/deadline, or a spawn error, per run's own contract --
+// propagates as an error.
 func (c *Client) HasUpstream(ctx context.Context) (bool, error) {
 	_, err := c.run(ctx, hasUpstreamArgs())
 	if err == nil {

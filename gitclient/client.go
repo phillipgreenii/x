@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -231,6 +232,20 @@ func (c *Client) Run(ctx context.Context, args ...string) ([]byte, error) {
 //
 // Otherwise -- no context error -- a non-zero exit is turned into an
 // error via classify.
+//
+// Process-group kill on cancellation: a hook git runs synchronously (e.g.
+// post-checkout) is a GRANDCHILD of this call, not a direct child, and it
+// can itself spawn further descendants (a shell running a long-lived
+// command). exec.CommandContext's default cancellation only kills the
+// direct git child; a grandchild that has already forked off its own
+// process tree is unaffected and keeps running orphaned. cmd.SysProcAttr
+// below puts the child in its OWN new process group (Setpgid), which
+// every descendant it forks inherits, and cmd.Cancel overrides the
+// default single-process kill to signal that whole group (the negative
+// pid convention -- kill(2)/man 2 kill) instead, so a killed invocation
+// never leaves a hook's descendants running. WaitDelay still bounds how
+// long Wait() waits for the (now entirely dead) group's inherited I/O
+// pipes to close.
 func (c *Client) run(ctx context.Context, va verbArgs) ([]byte, error) {
 	env := c.envUnparsed
 	if va.Parsed {
@@ -241,6 +256,10 @@ func (c *Client) run(ctx context.Context, va verbArgs) ([]byte, error) {
 	cmd.Dir = c.dir
 	cmd.Env = env
 	cmd.WaitDelay = defaultWaitDelay
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

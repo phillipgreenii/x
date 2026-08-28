@@ -232,6 +232,59 @@ func TestHasUpstreamFalseWithoutOneTrueOnceOneIsConfigured(t *testing.T) {
 	}
 }
 
+// TestHasUpstreamFalseForADanglingUpstreamConfig covers the item-4
+// investigation for pg2-i0q71: an upstream that resolves fine, then
+// stops resolving because its tracking config was corrupted to name a
+// ref that was never fetched (the "dangling upstream config" shape --
+// distinct from TestHasUpstreamFalseWithoutOneTrueOnceOneIsConfigured's
+// "never configured" shape above). Verified behaviorally against real
+// git 2.54.0 that this fails with "fatal: ambiguous argument '@{u}'" --
+// a DIFFERENT stderr message from the "never configured" case's "fatal:
+// no upstream configured", but the SAME exit 128 -- and HasUpstream's doc
+// comment documents both as folding into (false, nil) by design.
+func TestHasUpstreamFalseForADanglingUpstreamConfig(t *testing.T) {
+	ctx := t.Context()
+	producer := gittest.New(t, gitfixture.RepoOptions{Suite: "has-upstream-dangling-producer"})
+	if _, err := producer.Commit(ctx, "seed", map[string]string{"a.txt": "hello\n"}); err != nil {
+		t.Fatalf("producer.Commit() error = %v", err)
+	}
+	bareRemote, err := producer.AddBareRemote(ctx, "origin")
+	if err != nil {
+		t.Fatalf("AddBareRemote() error = %v", err)
+	}
+	if _, err := producer.Client.Run(ctx, "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("pushing to the bare remote: %v", err)
+	}
+
+	local := gittest.New(t, gitfixture.RepoOptions{Suite: "has-upstream-dangling-local"})
+	if _, err := local.Client.Run(ctx, "remote", "add", "origin", bareRemote.Dir); err != nil {
+		t.Fatalf("remote add: %v", err)
+	}
+	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{}); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if _, err := local.Client.Run(ctx, "checkout", "-b", "main", "--track", "origin/main"); err != nil {
+		t.Fatalf("checkout --track: %v", err)
+	}
+	if ok, err := local.Client.HasUpstream(ctx); err != nil || !ok {
+		t.Fatalf("HasUpstream() before corrupting the tracking config = (%v, %v), want (true, nil); test setup invalid", ok, err)
+	}
+
+	// Corrupt the tracking config to name a ref that was never fetched --
+	// the dangling shape.
+	if _, err := local.Client.Run(ctx, "config", "branch.main.merge", "refs/heads/never-fetched"); err != nil {
+		t.Fatalf("corrupting branch.main.merge: %v", err)
+	}
+
+	ok, err := local.Client.HasUpstream(ctx)
+	if err != nil {
+		t.Errorf("HasUpstream() with a dangling upstream config: error = %v, want nil (an ordinary git failure here is reported as false, not an error, per its documented design)", err)
+	}
+	if ok {
+		t.Errorf("HasUpstream() with a dangling upstream config = true, want false")
+	}
+}
+
 // TestCommitsAheadCountsCommitsReachableFromTipButNotBase proves
 // CommitsAhead reports the count of commits on tip that base does not
 // have, using two diverging branches so the count is unambiguous.
@@ -352,6 +405,58 @@ func TestStatusReportsARenameWithReversedNULOrder(t *testing.T) {
 	}
 	if found.OrigPath != "original.txt" {
 		t.Errorf("renamed entry OrigPath = %q, want the ORIGINAL name %q -- a swapped Path/OrigPath would report %q here", found.OrigPath, "original.txt", "renamed.txt")
+	}
+}
+
+// TestStatusReportsAWorkTreeOnlyRenameViaAddDashN is the item-1 regression
+// test for pg2-i0q71: git's -z porcelain format also emits a rename/copy
+// record when only the UNSTAGED (Y) column -- not the staged (X) column
+// TestStatusReportsARenameWithReversedNULOrder above covers -- is 'R'/'C'.
+// `mv tracked-file new-name && git add -N new-name` produces exactly this
+// shape: a rename that exists only in the worktree, made visible to git
+// only via an intent-to-add. Before the fix, parseStatus checked only the
+// staged column for R/C, so it never consumed this record's second
+// NUL-terminated orig-path field; the NEXT record's own XY-prefix bytes
+// were then misread as path text, and Status() failed with "expected a
+// space after the XY status code, got ...".
+func TestStatusReportsAWorkTreeOnlyRenameViaAddDashN(t *testing.T) {
+	ctx := t.Context()
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "status-worktree-rename"})
+	if _, err := repo.Commit(ctx, "seed", map[string]string{"original.txt": "some content that survives the rename\n"}); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	oldPath := filepath.Join(repo.Dir, "original.txt")
+	newPath := filepath.Join(repo.Dir, "renamed.txt")
+	if err := os.Rename(oldPath, newPath); err != nil {
+		t.Fatalf("os.Rename(%s, %s): %v", oldPath, newPath, err)
+	}
+	if _, err := repo.Client.Run(ctx, "add", "-N", "renamed.txt"); err != nil {
+		t.Fatalf("git add -N renamed.txt: %v", err)
+	}
+
+	entries, err := repo.Client.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status() error = %v, want nil -- a work-tree-only rename (Unstaged=='R') must parse, not hard-fail", err)
+	}
+
+	var found *gitclient.StatusEntry
+	for i := range entries {
+		if entries[i].Unstaged == gitclient.StatusRenamed {
+			found = &entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("Status() reported no work-tree-only StatusRenamed entry (Unstaged=='R'); test setup invalid: %#v", entries)
+	}
+	if found.Staged != gitclient.StatusUnmodified {
+		t.Errorf("renamed entry Staged = %q, want %q (this rename is unstaged-only)", found.Staged, gitclient.StatusUnmodified)
+	}
+	if found.Path != "renamed.txt" {
+		t.Errorf("renamed entry Path = %q, want the NEW name %q", found.Path, "renamed.txt")
+	}
+	if found.OrigPath != "original.txt" {
+		t.Errorf("renamed entry OrigPath = %q, want the ORIGINAL name %q", found.OrigPath, "original.txt")
 	}
 }
 
@@ -571,6 +676,83 @@ func TestChangedFilesReportsAdditionsDeletionsAndBinary(t *testing.T) {
 	}
 	if bin.Additions != 0 || bin.Deletions != 0 {
 		t.Errorf("binary.dat reported (Additions,Deletions) = (%d,%d), want (0,0) for a binary file", bin.Additions, bin.Deletions)
+	}
+}
+
+// TestChangedFilesNonASCIIFilenameIsNotEscaped is the item-2 regression
+// test for pg2-i0q71: numstatArgs was missing -z, so git's default
+// core.quotepath=true C-quoted/octal-escaped a non-ASCII filename in
+// --numstat's plain output (verified behaviorally: "café.txt" comes back
+// as the literal string `"caf\303\251.txt"`), and ChangedFiles returned
+// that literal quoted/escaped text as FileChange.Path instead of the real
+// name.
+func TestChangedFilesNonASCIIFilenameIsNotEscaped(t *testing.T) {
+	ctx := t.Context()
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "changed-files-non-ascii"})
+	const name = "café.txt"
+	baseSHA, err := repo.Commit(ctx, "base", map[string]string{name: "line1\n"})
+	if err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if err := repo.WriteFile(name, "line1\nline2\n"); err != nil {
+		t.Fatalf("WriteFile(%s): %v", name, err)
+	}
+	if _, err := repo.Client.Run(ctx, "commit", "-am", "edit "+name); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	changes, err := repo.Client.ChangedFiles(ctx, baseSHA)
+	if err != nil {
+		t.Fatalf("ChangedFiles() error = %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("ChangedFiles() returned %d entries, want 1: %#v", len(changes), changes)
+	}
+	if changes[0].Path != name {
+		t.Errorf("ChangedFiles()[0].Path = %q, want the real name %q -- not C-quoted/octal-escaped", changes[0].Path, name)
+	}
+}
+
+// TestChangedFilesReportsARenamedAndEditedFileWithRealPaths is the item-3
+// regression test for pg2-i0q71: git detects a rename by default on
+// `diff --numstat` (no flag required), and non -z mode compacts it into a
+// single "old.txt => new.txt" descriptor string in the THIRD tab field --
+// which the pre-fix parser's naive 3-way split took whole as
+// FileChange.Path, never a real path in either tree.
+func TestChangedFilesReportsARenamedAndEditedFileWithRealPaths(t *testing.T) {
+	ctx := t.Context()
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "changed-files-rename"})
+	baseSHA, err := repo.Commit(ctx, "base", map[string]string{"old.txt": "line1\nline2\nline3\nline4\nline5\n"})
+	if err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	if _, err := repo.Client.Run(ctx, "mv", "old.txt", "new.txt"); err != nil {
+		t.Fatalf("git mv old.txt new.txt: %v", err)
+	}
+	if err := repo.WriteFile("new.txt", "line1\nline2 EDITED\nline3\nline4\nline5\nline6\n"); err != nil {
+		t.Fatalf("WriteFile(new.txt): %v", err)
+	}
+	if _, err := repo.Client.Run(ctx, "commit", "-am", "rename and edit"); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	changes, err := repo.Client.ChangedFiles(ctx, baseSHA)
+	if err != nil {
+		t.Fatalf("ChangedFiles() error = %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("ChangedFiles() returned %d entries, want 1 (a single detected rename); test setup invalid if git did not detect the rename: %#v", len(changes), changes)
+	}
+	fc := changes[0]
+	if fc.Path != "new.txt" {
+		t.Errorf("fc.Path = %q, want the real NEW path %q, not a literal \"old.txt => new.txt\" descriptor", fc.Path, "new.txt")
+	}
+	if fc.OrigPath != "old.txt" {
+		t.Errorf("fc.OrigPath = %q, want the real ORIGINAL path %q", fc.OrigPath, "old.txt")
+	}
+	if fc.Additions == 0 && fc.Deletions == 0 {
+		t.Errorf("fc reported no additions/deletions for an edited rename: %#v", fc)
 	}
 }
 

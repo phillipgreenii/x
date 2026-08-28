@@ -6,7 +6,8 @@ import (
 )
 
 func TestParseNumstatRegularFiles(t *testing.T) {
-	data := []byte("3\t1\tfoo.go\n0\t4\tbar/baz.go\n")
+	data := []byte("3\t1\t" + "foo.go" + "\x00" +
+		"0\t4\t" + "bar/baz.go" + "\x00")
 
 	got, err := parseNumstat(data)
 	if err != nil {
@@ -22,7 +23,7 @@ func TestParseNumstatRegularFiles(t *testing.T) {
 }
 
 func TestParseNumstatBinaryFileUsesDashMarkers(t *testing.T) {
-	data := []byte("-\t-\tbinary.png\n")
+	data := []byte("-\t-\t" + "binary.png" + "\x00")
 
 	got, err := parseNumstat(data)
 	if err != nil {
@@ -35,7 +36,8 @@ func TestParseNumstatBinaryFileUsesDashMarkers(t *testing.T) {
 }
 
 func TestParseNumstatMixedBinaryAndTextWithSpacesInPath(t *testing.T) {
-	data := []byte("2\t2\tpath with spaces.txt\n-\t-\tan image.png\n")
+	data := []byte("2\t2\t" + "path with spaces.txt" + "\x00" +
+		"-\t-\t" + "an image.png" + "\x00")
 
 	got, err := parseNumstat(data)
 	if err != nil {
@@ -60,14 +62,14 @@ func TestParseNumstatEmptyInput(t *testing.T) {
 	}
 }
 
-func TestParseNumstatMalformedLineErrors(t *testing.T) {
-	if _, err := parseNumstat([]byte("only-one-field\n")); err == nil {
-		t.Fatal("expected an error for a line without three tab-separated fields")
+func TestParseNumstatMalformedRecordMissingSecondTabErrors(t *testing.T) {
+	if _, err := parseNumstat([]byte("only-one-field-no-second-tab\x00")); err == nil {
+		t.Fatal("expected an error for a record without a second tab")
 	}
 }
 
 func TestParseNumstatNonNumericCountErrors(t *testing.T) {
-	if _, err := parseNumstat([]byte("x\ty\tfoo.go\n")); err == nil {
+	if _, err := parseNumstat([]byte("x\ty\t" + "foo.go" + "\x00")); err == nil {
 		t.Fatal("expected an error for non-numeric, non-dash addition/deletion counts")
 	}
 }
@@ -78,14 +80,79 @@ func TestParseNumstatNonNumericCountErrors(t *testing.T) {
 // first and returns immediately on error, so a bad deletions count behind a
 // VALID additions count is a distinct, otherwise-unreached branch.
 func TestParseNumstatNonNumericDeletionCountErrors(t *testing.T) {
-	if _, err := parseNumstat([]byte("3\ty\tfoo.go\n")); err == nil {
+	if _, err := parseNumstat([]byte("3\ty\t" + "foo.go" + "\x00")); err == nil {
 		t.Fatal("expected an error for a non-numeric deletion count")
+	}
+}
+
+func TestParseNumstatUnterminatedPathErrors(t *testing.T) {
+	if _, err := parseNumstat([]byte("3\t1\tno-terminating-nul")); err == nil {
+		t.Fatal("expected an error for a path with no terminating NUL")
+	}
+}
+
+// TestParseNumstatRenameRecordPopulatesRealOldAndNewPaths is the numstat
+// analogue of TestParseStatusRenameFieldOrderIsReversedNewThenOrig: a
+// rename/copy record's on-wire shape is
+//
+//	"<add>\t<del>\t" + NUL (empty third field, signaling a rename) +
+//	old-path + NUL + new-path + NUL
+//
+// -- old path FIRST, then new path (the NATURAL order -- unlike status
+// -z's reversed new-then-orig order). A naive 3-way split (the pre-fix
+// parser) would take the whole record's leftover text as one literal
+// path, never recognizing the empty-field marker or decoding real paths.
+func TestParseNumstatRenameRecordPopulatesRealOldAndNewPaths(t *testing.T) {
+	data := []byte("2\t1\t" + "\x00" + "old.txt" + "\x00" + "new.txt" + "\x00")
+
+	got, err := parseNumstat(data)
+	if err != nil {
+		t.Fatalf("parseNumstat: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("parseNumstat() returned %d entries, want 1: %#v", len(got), got)
+	}
+	fc := got[0]
+	if fc.Path != "new.txt" {
+		t.Errorf("fc.Path = %q, want the NEW path %q, not a literal descriptor string", fc.Path, "new.txt")
+	}
+	if fc.OrigPath != "old.txt" {
+		t.Errorf("fc.OrigPath = %q, want the ORIGINAL path %q", fc.OrigPath, "old.txt")
+	}
+	if fc.Additions != 2 || fc.Deletions != 1 {
+		t.Errorf("(Additions,Deletions) = (%d,%d), want (2,1)", fc.Additions, fc.Deletions)
+	}
+}
+
+func TestParseNumstatPureRenameRecordHasZeroAdditionsDeletions(t *testing.T) {
+	// A pure rename with no content change reports "0\t0\t" -- verified
+	// behaviorally against real git 2.54.0.
+	data := []byte("0\t0\t" + "\x00" + "old.txt" + "\x00" + "new.txt" + "\x00")
+
+	got, err := parseNumstat(data)
+	if err != nil {
+		t.Fatalf("parseNumstat: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "new.txt" || got[0].OrigPath != "old.txt" {
+		t.Fatalf("parseNumstat() = %#v, want a single rename entry old.txt -> new.txt", got)
+	}
+}
+
+func TestParseNumstatUnterminatedOrigPathInRenameRecordErrors(t *testing.T) {
+	if _, err := parseNumstat([]byte("2\t1\t\x00no-terminating-nul-for-orig-path")); err == nil {
+		t.Fatal("expected an error for a rename record missing its original-path terminator")
+	}
+}
+
+func TestParseNumstatUnterminatedNewPathInRenameRecordErrors(t *testing.T) {
+	if _, err := parseNumstat([]byte("2\t1\t\x00old.txt\x00no-terminating-nul-for-new-path")); err == nil {
+		t.Fatal("expected an error for a rename record missing its new-path terminator")
 	}
 }
 
 func TestNumstatArgs(t *testing.T) {
 	v := numstatArgs("main")
-	want := []string{"diff", "--numstat", "main...HEAD"}
+	want := []string{"diff", "--numstat", "-z", "main...HEAD"}
 	if !reflect.DeepEqual(v.Args, want) {
 		t.Errorf("numstatArgs(\"main\").Args = %v, want %v", v.Args, want)
 	}

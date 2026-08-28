@@ -39,6 +39,19 @@ package gitclient
 // canceled/deadlined runs use a hook sleep far longer than the assertion's
 // upper bound, so completing inside that bound is only possible if the
 // process was actually killed rather than waited out.
+//
+// Process-group leak check (bead pg2-i0q71 item 5): the hook script itself
+// is only client.go's run's GRANDCHILD (git -> sh running the hook), and
+// that grandchild backgrounds `sleep` as ITS OWN child -- a great-
+// grandchild. Before client.go's Setpgid/negative-pid kill fix, canceling
+// the direct git child left both the hook's `sh` and its backgrounded
+// `sleep` running, orphaned, for up to the hook's full sleep duration --
+// with this test's own t.TempDir() worktree already removed out from
+// under them. plantSleepHook now has the script record its backgrounded
+// sleep's own PID (via `$!`) to a file, and both kill tests poll that PID
+// for a bounded window immediately after the killed call returns,
+// proving directly -- not just by eyeballing `ps` during a manual run --
+// that no `sleep` process outlives the test.
 
 import (
 	"context"
@@ -46,6 +59,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -54,6 +69,7 @@ const (
 	contractKillControlSleepSeconds = 2
 	contractKillLongSleepSeconds    = 20
 	contractKillBound               = 12 * time.Second
+	contractKillSleepDeathBound     = 3 * time.Second
 )
 
 // setupBlockableRepo creates a repo with one commit and an explicit,
@@ -80,15 +96,89 @@ func setupBlockableRepo(t *testing.T, ctx context.Context) (*Client, string) {
 	return c, hooksDir
 }
 
+// sleepPIDFile is the deterministic path plantSleepHook's script writes
+// its backgrounded `sleep` child's PID into (see the file doc comment's
+// process-group leak check).
+func sleepPIDFile(hooksDir string) string {
+	return filepath.Join(hooksDir, "sleep.pid")
+}
+
+// shellQuote wraps s in single quotes for safe embedding as one POSIX
+// shell word, escaping any literal single quote in s itself.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // plantSleepHook writes an executable post-checkout hook at
-// <hooksDir>/post-checkout that sleeps for seconds before exiting 0.
+// <hooksDir>/post-checkout that sleeps for seconds before exiting 0. The
+// sleep is backgrounded and waited on (rather than being the script's
+// direct tail call) specifically so it gets its OWN pid, distinct from
+// the hook script's, which the script records via sleepPIDFile so a test
+// can later probe it directly.
 func plantSleepHook(t *testing.T, hooksDir string, seconds int) {
 	t.Helper()
 	path := filepath.Join(hooksDir, "post-checkout")
-	script := "#!/bin/sh\nsleep " + strconv.Itoa(seconds) + "\nexit 0\n"
+	script := "#!/bin/sh\n" +
+		"sleep " + strconv.Itoa(seconds) + " &\n" +
+		"echo $! > " + shellQuote(sleepPIDFile(hooksDir)) + "\n" +
+		"wait $!\n" +
+		"exit 0\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing hook %s: %v", path, err)
 	}
+}
+
+// processAlive reports whether a process with the given pid still exists.
+// It sends signal 0 (kill(2)'s documented no-op probe: existence/
+// permission is checked, no signal is actually delivered) rather than
+// shelling out to `ps` and parsing its output, which differs between
+// macOS and Linux CI.
+func processAlive(pid int) bool {
+	return syscall.Kill(pid, 0) != syscall.ESRCH
+}
+
+// waitUntilDead polls pid until it is no longer alive or timeout elapses,
+// absorbing the brief window between SIGKILL delivery and the OS reaping
+// the process (during which it may still transiently exist as a zombie)
+// rather than treating that race as a hard leak.
+func waitUntilDead(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if !processAlive(pid) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// readSleepPID reads the pid plantSleepHook's script recorded, with a
+// short bounded retry: the hook is still a separate process writing this
+// file concurrently with this test's own cancellation timer, so a read
+// immediately after the killed call returns could otherwise race the
+// write.
+func readSleepPID(t *testing.T, hooksDir string) int {
+	t.Helper()
+	path := sleepPIDFile(hooksDir)
+	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			lastErr = err
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil {
+			t.Fatalf("parsing pid from %s (%q): %v", path, data, err)
+		}
+		return pid
+	}
+	t.Fatalf("reading %s: %v", path, lastErr)
+	return 0
 }
 
 func TestContextCancelKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
@@ -128,6 +218,11 @@ func TestContextCancelKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
 	if killElapsed >= contractKillBound {
 		t.Errorf("CreateWorktree() under cancellation took %v, want it killed within %v (bounded by defaultWaitDelay), not left to run out the hook's %ds sleep", killElapsed, contractKillBound, contractKillLongSleepSeconds)
 	}
+
+	sleepPID := readSleepPID(t, hooksDir)
+	if !waitUntilDead(sleepPID, contractKillSleepDeathBound) {
+		t.Errorf("the hook's backgrounded `sleep %ds` (pid %d) outlived the canceled CreateWorktree() call by more than %v -- the process GROUP was not killed, only the direct git child", contractKillLongSleepSeconds, sleepPID, contractKillSleepDeathBound)
+	}
 }
 
 func TestContextDeadlineKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
@@ -147,5 +242,10 @@ func TestContextDeadlineKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
 	}
 	if killElapsed >= contractKillBound {
 		t.Errorf("CreateWorktree() under a deadline took %v, want it killed within %v (bounded by defaultWaitDelay), not left to run out the hook's %ds sleep", killElapsed, contractKillBound, contractKillLongSleepSeconds)
+	}
+
+	sleepPID := readSleepPID(t, hooksDir)
+	if !waitUntilDead(sleepPID, contractKillSleepDeathBound) {
+		t.Errorf("the hook's backgrounded `sleep %ds` (pid %d) outlived the deadline-killed CreateWorktree() call by more than %v -- the process GROUP was not killed, only the direct git child", contractKillLongSleepSeconds, sleepPID, contractKillSleepDeathBound)
 	}
 }
