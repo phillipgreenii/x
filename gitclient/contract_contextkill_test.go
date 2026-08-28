@@ -1,0 +1,151 @@
+//go:build contract
+
+package gitclient
+
+// Contract test 4 (design §6, epic pg2-svfbb): the context contract's
+// bounded-kill requirement (pr-pool watchdog's bounded-probe need, pg2-
+// yy42). A git invocation that is genuinely still running when its
+// context is canceled/deadlined must be killed PROMPTLY -- bounded by
+// client.go's defaultWaitDelay, not left to run to completion -- and the
+// returned error must satisfy errors.Is(err, context.Canceled) /
+// errors.Is(err, context.DeadlineExceeded). client.go's run already
+// implements this (bead pg2-svfbb.2); this test proves that mechanism
+// rather than building a new one.
+//
+// The blocking mechanism: `worktree add` runs the post-checkout hook
+// SYNCHRONOUSLY as part of the git process. A hook that sleeps makes the
+// invocation genuinely, controllably blocked; because the hook is a
+// GRANDCHILD process that inherits the git process's stdout/stderr pipes,
+// killing the direct git child does not by itself close those pipes --
+// exactly the WaitDelay scenario run's own doc comment describes ("a
+// killed child that inherited open I/O pipes ... cannot stall the kill").
+//
+// core.hooksPath is set EXPLICITLY, repo-local, to a directory this test
+// owns, rather than relying on the repository's default .git/hooks --
+// verified empirically (this bead) that this development machine carries
+// a GLOBAL core.hooksPath override (~/.config/git/config), which takes
+// precedence over the default .git/hooks location and silently defeated
+// an earlier version of this test (the planted default-location hook
+// never ran at all, and CreateWorktree returned in milliseconds). Setting
+// core.hooksPath repo-locally overrides that global config the same way
+// gitfixture itself does, making the test hermetic to whatever hooks
+// configuration happens to be ambient on the machine running it.
+//
+// Two controls make this decisive rather than a happy-path timing
+// accident: (1) letting the SAME shape of invocation run to completion
+// UNCANCELED, with a short hook sleep, proves the hook is a genuine block
+// close to its sleep duration -- not a no-op that would make "it finished
+// quickly" a live alternative explanation for the canceled case; (2) the
+// canceled/deadlined runs use a hook sleep far longer than the assertion's
+// upper bound, so completing inside that bound is only possible if the
+// process was actually killed rather than waited out.
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+)
+
+const (
+	contractKillControlSleepSeconds = 2
+	contractKillLongSleepSeconds    = 20
+	contractKillBound               = 12 * time.Second
+)
+
+// setupBlockableRepo creates a repo with one commit and an explicit,
+// repo-local core.hooksPath (see the file doc comment for why this must
+// not be left at the default), returning the client and the hooks
+// directory to plant scripts into.
+func setupBlockableRepo(t *testing.T, ctx context.Context) (*Client, string) {
+	t.Helper()
+	dir := t.TempDir()
+	c, err := Init(ctx, dir, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if _, err := c.Run(ctx, "commit", "--allow-empty", "-m", "seed"); err != nil {
+		t.Fatalf("seeding a commit: %v", err)
+	}
+	hooksDir := filepath.Join(dir, "test-hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", hooksDir, err)
+	}
+	if _, err := c.Run(ctx, "config", "core.hooksPath", hooksDir); err != nil {
+		t.Fatalf("configuring core.hooksPath: %v", err)
+	}
+	return c, hooksDir
+}
+
+// plantSleepHook writes an executable post-checkout hook at
+// <hooksDir>/post-checkout that sleeps for seconds before exiting 0.
+func plantSleepHook(t *testing.T, hooksDir string, seconds int) {
+	t.Helper()
+	path := filepath.Join(hooksDir, "post-checkout")
+	script := "#!/bin/sh\nsleep " + strconv.Itoa(seconds) + "\nexit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing hook %s: %v", path, err)
+	}
+}
+
+func TestContextCancelKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
+	ctx := t.Context()
+	c, hooksDir := setupBlockableRepo(t, ctx)
+
+	// Control: a SHORT hook sleep, run to completion with NO cancellation,
+	// proves the hook genuinely blocks the invocation for close to its
+	// sleep duration.
+	plantSleepHook(t, hooksDir, contractKillControlSleepSeconds)
+	controlStart := time.Now()
+	if err := c.CreateWorktree(ctx, filepath.Join(t.TempDir(), "wt-control"), "control-branch", CreateWorktreeOptions{}); err != nil {
+		t.Fatalf("control CreateWorktree() error = %v", err)
+	}
+	controlElapsed := time.Since(controlStart)
+	minExpected := time.Duration(contractKillControlSleepSeconds) * time.Second * 3 / 4
+	if controlElapsed < minExpected {
+		t.Fatalf("control CreateWorktree() (uncanceled) completed in %v, want at least %v (close to the hook's %ds sleep) -- the hook is not genuinely blocking, so the canceled assertion below would prove nothing", controlElapsed, minExpected, contractKillControlSleepSeconds)
+	}
+
+	// Guarantee: a hook sleep far longer than contractKillBound, canceled
+	// shortly after starting.
+	plantSleepHook(t, hooksDir, contractKillLongSleepSeconds)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+	killStart := time.Now()
+	err := c.CreateWorktree(cancelCtx, filepath.Join(t.TempDir(), "wt-kill"), "kill-branch", CreateWorktreeOptions{})
+	killElapsed := time.Since(killStart)
+	cancel()
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("CreateWorktree() under a canceled context: error = %v, want errors.Is(_, context.Canceled)", err)
+	}
+	if killElapsed >= contractKillBound {
+		t.Errorf("CreateWorktree() under cancellation took %v, want it killed within %v (bounded by defaultWaitDelay), not left to run out the hook's %ds sleep", killElapsed, contractKillBound, contractKillLongSleepSeconds)
+	}
+}
+
+func TestContextDeadlineKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
+	ctx := t.Context()
+	c, hooksDir := setupBlockableRepo(t, ctx)
+	plantSleepHook(t, hooksDir, contractKillLongSleepSeconds)
+
+	deadlineCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+
+	killStart := time.Now()
+	err := c.CreateWorktree(deadlineCtx, filepath.Join(t.TempDir(), "wt-deadline"), "deadline-branch", CreateWorktreeOptions{})
+	killElapsed := time.Since(killStart)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("CreateWorktree() under an expired deadline: error = %v, want errors.Is(_, context.DeadlineExceeded)", err)
+	}
+	if killElapsed >= contractKillBound {
+		t.Errorf("CreateWorktree() under a deadline took %v, want it killed within %v (bounded by defaultWaitDelay), not left to run out the hook's %ds sleep", killElapsed, contractKillBound, contractKillLongSleepSeconds)
+	}
+}

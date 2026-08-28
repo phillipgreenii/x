@@ -23,9 +23,20 @@ There are no release tags; pin a commit and bump it like any other dependency.
 ## Testing
 
 ```
-go test -race ./...
 go vet ./...
+go test -race ./...
+go test -race -tags integration,contract ./...
 ```
 
-Both also run in CI on every push (`.github/workflows/ci.yml`) — that's this repo's only gate;
-there's no nix flake here.
+- Untagged tests are unit tests: no real git binary, no subprocess.
+- `integration` tests exercise the packages' role interfaces against a real git binary, always
+  through the `gitfixture`/`gittest` isolated-repo fixture (never a real repository).
+- `contract` tests are the acceptance suite that proves the hermeticity guarantees themselves —
+  that a client's child git process can't read or write outside the repo it's anchored at even
+  under a hostile ambient environment, that the client's environment allowlist is complete, and
+  that a canceled/deadlined context kills a blocked git invocation promptly.
+
+All three commands run in CI on every push (`.github/workflows/ci.yml`) — that's this repo's only
+gate; there's no nix flake here. The `integration`/`contract` suites need a real `git` binary on
+PATH (present on GitHub's `ubuntu-latest` runners); a consumer's own `nix flake check` never runs
+them — only this repo's own CI does.
