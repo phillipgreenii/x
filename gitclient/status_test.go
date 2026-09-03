@@ -141,7 +141,7 @@ func TestParseStatusUnterminatedOrigPathErrors(t *testing.T) {
 
 func TestStatusArgs(t *testing.T) {
 	v := statusArgs()
-	wantArgs := []string{"status", "--porcelain=v1", "-z"}
+	wantArgs := []string{"-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z"}
 	if !reflect.DeepEqual(v.Args, wantArgs) {
 		t.Errorf("statusArgs().Args = %v, want %v", v.Args, wantArgs)
 	}

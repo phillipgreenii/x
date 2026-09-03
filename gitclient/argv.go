@@ -67,9 +67,16 @@ func commitsAheadArgs(base, tip string) verbArgs {
 
 // --- StatusReader ---
 
-// statusArgs builds `status --porcelain=v1 -z` (StatusReader.Status).
+// statusArgs builds `-c core.fsmonitor=false status --porcelain=v1 -z`
+// (StatusReader.Status). The `-c core.fsmonitor=false` is unconditional
+// and hardcoded here -- not a WithConfig-style per-call override, not a
+// per-instance construction knob -- per bead pg2-f1cq7's own resolved-
+// without-new-mechanism directive: every Status call, for every
+// consumer, always disables fsmonitor, so a wedged `git
+// fsmonitor--daemon` can never cause this call to hang or return stale
+// results.
 func statusArgs() verbArgs {
-	return verbArgs{Args: []string{"status", "--porcelain=v1", "-z"}, Parsed: true}
+	return verbArgs{Args: []string{"-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z"}, Parsed: true}
 }
 
 // isTrackedArgs builds `ls-files --error-unmatch <path>`
