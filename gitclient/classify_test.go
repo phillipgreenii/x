@@ -1,7 +1,9 @@
 package gitclient
 
 import (
+	"context"
 	"errors"
+	"os/exec"
 	"testing"
 )
 
@@ -96,6 +98,94 @@ func TestClassifyCopiesArgsDefensively(t *testing.T) {
 	args[0] = "mutated"
 	if ge.Args[0] != "status" {
 		t.Errorf("GitError.Args was aliased to the caller's slice: got %v after mutation", ge.Args)
+	}
+}
+
+// TestClassifyRunErrNilIsNil covers classifyRunErr's short-circuit: a nil
+// runErr (the invocation succeeded) must return nil regardless of ctx or
+// stderr content.
+func TestClassifyRunErrNilIsNil(t *testing.T) {
+	if err := classifyRunErr(t.Context(), []string{"status"}, []byte("noise"), nil); err != nil {
+		t.Errorf("classifyRunErr(nil runErr) = %v, want nil", err)
+	}
+}
+
+// TestClassifyRunErrExitErrorDelegatesToClassify proves run's buffered
+// spawn and Handle's streaming spawn (newHandle) apply IDENTICAL
+// classification for an ordinary non-zero exit: classifyRunErr's
+// *exec.ExitError branch must produce the exact same *GitError classify
+// itself would for the same (args, exitCode, stderr).
+func TestClassifyRunErrExitErrorDelegatesToClassify(t *testing.T) {
+	ctx := t.Context()
+	cmd := exec.CommandContext(ctx, "sh", "-c", "exit 3")
+	runErr := cmd.Run()
+	if runErr == nil {
+		t.Fatal("cmd.Run() = nil, want a non-nil *exec.ExitError from `sh -c \"exit 3\"`")
+	}
+
+	args := []string{"status", "--porcelain"}
+	got := classifyRunErr(ctx, args, []byte("some stderr\n"), runErr)
+
+	want := classify(args, 3, []byte("some stderr\n"))
+	var gotErr, wantErr *GitError
+	if !errors.As(got, &gotErr) {
+		t.Fatalf("classifyRunErr() = %T, want *GitError", got)
+	}
+	if !errors.As(want, &wantErr) {
+		t.Fatalf("classify() = %T, want *GitError", want)
+	}
+	if got.Error() != want.Error() {
+		t.Errorf("classifyRunErr() = %q, want classify()'s own %q", got.Error(), want.Error())
+	}
+}
+
+// TestClassifyRunErrPrefersCtxErrOverExitStatus covers the context
+// contract's own documented subtlety (client.go's newCmd doc comment):
+// once ctx reports an error, classifyRunErr must wrap it (and fold in the
+// underlying runErr via errors.Is-preserving %w) rather than classifying
+// runErr as an ordinary *GitError -- even though runErr, taken alone,
+// looks like an ordinary non-zero exit.
+func TestClassifyRunErrPrefersCtxErrOverExitStatus(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", "exit 1")
+	runErr := cmd.Run()
+	if runErr == nil {
+		t.Fatal("cmd.Run() = nil, want a non-nil error from `sh -c \"exit 1\"`")
+	}
+
+	err := classifyRunErr(ctx, []string{"status"}, nil, runErr)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("classifyRunErr() = %v, want errors.Is(_, context.Canceled)", err)
+	}
+	var ge *GitError
+	if errors.As(err, &ge) {
+		t.Errorf("classifyRunErr() = %v (*GitError), want the ctx error to take precedence, not a plain *GitError", err)
+	}
+}
+
+// TestClassifyRunErrWrapsANonExitError covers classifyRunErr's final
+// fallback branch: a runErr that is neither nil, a ctx error, nor an
+// *exec.ExitError (a genuine spawn failure) must be wrapped as a plain
+// error, not misclassified as a *GitError.
+func TestClassifyRunErrWrapsANonExitError(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), t.TempDir()) // a directory is not executable
+	runErr := cmd.Run()
+	if runErr == nil {
+		t.Fatal("cmd.Run() = nil, want a spawn error (gitPath is a directory)")
+	}
+
+	err := classifyRunErr(t.Context(), []string{"status"}, nil, runErr)
+	if err == nil {
+		t.Fatal("classifyRunErr() = nil, want a wrapped spawn error")
+	}
+	var ge *GitError
+	if errors.As(err, &ge) {
+		t.Errorf("classifyRunErr() = %v (*GitError), want a non-GitError spawn error", err)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("classifyRunErr() = %v, want a spawn error, not a context error", err)
 	}
 }
 

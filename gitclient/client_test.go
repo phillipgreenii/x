@@ -365,6 +365,51 @@ func TestDiscoverOnANonExistentDirReturnsAWrappedResolveError(t *testing.T) {
 // ordinary git-failure branch: with a real repository to discover from but
 // an already-canceled context, Discover must propagate context.Canceled
 // rather than masking it as ErrNotARepository.
+// TestCloneSurfacesARejectedOption is Clone's counterpart to
+// TestNewSurfacesARejectedOptionRatherThanMaskingIt/
+// TestInitSurfacesARejectedOption: buildClientConfig's error (inside
+// setupAnchoredClient, before Clone's own prepare hook ever runs) must
+// surface directly, with a nil Handle -- no clone was ever attempted.
+func TestCloneSurfacesARejectedOption(t *testing.T) {
+	ctx := t.Context()
+	c, h, err := Clone(ctx, "https://example.invalid/repo.git", t.TempDir(), CloneOptions{}, WithCeiling(""))
+	if err == nil {
+		t.Fatal("Clone() error = nil, want the WithCeiling rejection")
+	}
+	if c != nil {
+		t.Errorf("Clone() Client = %v, want nil alongside the rejected option", c)
+	}
+	if h != nil {
+		t.Errorf("Clone() Handle = %v, want nil alongside the rejected option", h)
+	}
+}
+
+// TestCloneFailsWhenAParentPathComponentIsAFile covers Clone's own
+// os.MkdirAll error branch (client.go's prepare closure): dir's parent
+// segment already exists as a regular file, so MkdirAll cannot create
+// dir underneath it, and the error must surface as Clone's own top-level
+// error (never reaching a spawned clone process at all) -- mirroring
+// TestInitFailsWhenAParentPathComponentIsAFile.
+func TestCloneFailsWhenAParentPathComponentIsAFile(t *testing.T) {
+	ctx := t.Context()
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", blocker, err)
+	}
+
+	c, h, err := Clone(ctx, "https://example.invalid/repo.git", filepath.Join(blocker, "repo"), CloneOptions{})
+	if err == nil {
+		t.Fatal("Clone() under a file (not a directory): error = nil, want an error")
+	}
+	if c != nil {
+		t.Errorf("Clone() Client = %v, want nil", c)
+	}
+	if h != nil {
+		t.Errorf("Clone() Handle = %v, want nil (no clone process should ever have been started)", h)
+	}
+}
+
 func TestDiscoverPropagatesAnAlreadyCanceledContext(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := Init(t.Context(), dir, InitOptions{}); err != nil {

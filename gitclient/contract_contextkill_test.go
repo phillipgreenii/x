@@ -72,6 +72,17 @@ const (
 	contractKillSleepDeathBound     = 3 * time.Second
 )
 
+// waitHandle blocks on h.Wait() when the spawn itself succeeded, giving
+// CreateWorktree's new Handle-returning signature (bead pg2-f1cq7) the
+// same synchronous "did the whole invocation succeed" shape this file's
+// tests were written against.
+func waitHandle(h *Handle, err error) error {
+	if err != nil {
+		return err
+	}
+	return h.Wait()
+}
+
 // setupBlockableRepo creates a repo with one commit and an explicit,
 // repo-local core.hooksPath (see the file doc comment for why this must
 // not be left at the default), returning the client and the hooks
@@ -208,7 +219,7 @@ func TestContextCancelKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
 	// sleep duration.
 	plantSleepHook(t, hooksDir, contractKillControlSleepSeconds)
 	controlStart := time.Now()
-	if err := c.CreateWorktree(ctx, filepath.Join(t.TempDir(), "wt-control"), "control-branch", CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(c.CreateWorktree(ctx, filepath.Join(t.TempDir(), "wt-control"), "control-branch", CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("control CreateWorktree() error = %v", err)
 	}
 	controlElapsed := time.Since(controlStart)
@@ -226,7 +237,7 @@ func TestContextCancelKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
 		cancel()
 	}()
 	killStart := time.Now()
-	err := c.CreateWorktree(cancelCtx, filepath.Join(t.TempDir(), "wt-kill"), "kill-branch", CreateWorktreeOptions{})
+	err := waitHandle(c.CreateWorktree(cancelCtx, filepath.Join(t.TempDir(), "wt-kill"), "kill-branch", CreateWorktreeOptions{}))
 	killElapsed := time.Since(killStart)
 	cancel()
 
@@ -249,7 +260,7 @@ func TestContextDeadlineKillsAGenuinelyBlockedInvocationPromptly(t *testing.T) {
 	defer cancel()
 
 	killStart := time.Now()
-	err := c.CreateWorktree(deadlineCtx, filepath.Join(t.TempDir(), "wt-deadline"), "deadline-branch", CreateWorktreeOptions{})
+	err := waitHandle(c.CreateWorktree(deadlineCtx, filepath.Join(t.TempDir(), "wt-deadline"), "deadline-branch", CreateWorktreeOptions{}))
 	killElapsed := time.Since(killStart)
 
 	if !errors.Is(err, context.DeadlineExceeded) {

@@ -50,7 +50,7 @@ func TestFetchWithoutRefspecPullsTheConfiguredDefaultRefspec(t *testing.T) {
 		t.Fatalf("remote add: %v", err)
 	}
 
-	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{}); err != nil {
+	if err := waitHandle(local.Client.Fetch(ctx, gitclient.FetchOptions{})); err != nil {
 		t.Fatalf("Fetch(FetchOptions{}) error = %v", err)
 	}
 
@@ -90,7 +90,7 @@ func TestFetchWithForcePrefixedRefspecUpdatesANonFastForwardRef(t *testing.T) {
 		t.Fatalf("remote add: %v", err)
 	}
 
-	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{Refspec: prRefspec}); err != nil {
+	if err := waitHandle(local.Client.Fetch(ctx, gitclient.FetchOptions{Refspec: prRefspec})); err != nil {
 		t.Fatalf("initial Fetch(Refspec: %q) error = %v", prRefspec, err)
 	}
 	if got := revParse(t, ctx, local.Client, "refs/remotes/origin/pr/12"); got != sha1 {
@@ -114,7 +114,7 @@ func TestFetchWithForcePrefixedRefspecUpdatesANonFastForwardRef(t *testing.T) {
 	// Control: the SAME refspec without the force prefix must be rejected
 	// by git as a non-fast-forward update, proving the "+" prefix is not
 	// decorative.
-	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{Refspec: prRefspecNoForce}); err == nil {
+	if err := waitHandle(local.Client.Fetch(ctx, gitclient.FetchOptions{Refspec: prRefspecNoForce})); err == nil {
 		t.Fatal("Fetch(non-force refspec) over a rewritten ref = nil error, want a non-fast-forward rejection")
 	} else {
 		var gitErr *gitclient.GitError
@@ -128,7 +128,7 @@ func TestFetchWithForcePrefixedRefspecUpdatesANonFastForwardRef(t *testing.T) {
 
 	// The guarantee: the force-prefixed refspec succeeds and updates the
 	// ref to the new, non-fast-forward tip.
-	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{Refspec: prRefspec}); err != nil {
+	if err := waitHandle(local.Client.Fetch(ctx, gitclient.FetchOptions{Refspec: prRefspec})); err != nil {
 		t.Fatalf("Fetch(force-prefixed refspec) error = %v, want nil", err)
 	}
 	if got := revParse(t, ctx, local.Client, "refs/remotes/origin/pr/12"); got != sha2 {
@@ -149,7 +149,7 @@ func TestFetchDefaultOptionsLeaveStaleTrackingRefIntactDespiteFetchPruneConfig(t
 	local, bareRemote, prSHA := setupStalePRRefScenario(t)
 	ctx := t.Context()
 
-	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{}); err != nil {
+	if err := waitHandle(local.Client.Fetch(ctx, gitclient.FetchOptions{})); err != nil {
 		t.Fatalf("Fetch(FetchOptions{}) error = %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestFetchAllowPruneRemovesStaleTrackingRefWhenConfigEnablesIt(t *testing.T)
 	local, _, _ := setupStalePRRefScenario(t)
 	ctx := t.Context()
 
-	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{AllowPrune: true}); err != nil {
+	if err := waitHandle(local.Client.Fetch(ctx, gitclient.FetchOptions{AllowPrune: true})); err != nil {
 		t.Fatalf("Fetch(AllowPrune: true) error = %v", err)
 	}
 
@@ -230,7 +230,7 @@ func setupStalePRRefScenario(t *testing.T) (local *gitfixture.Repo, bareRemote *
 	}
 
 	// Establish the local tracking ref before it goes stale.
-	if err := localRepo.Client.Fetch(ctx, gitclient.FetchOptions{}); err != nil {
+	if err := waitHandle(localRepo.Client.Fetch(ctx, gitclient.FetchOptions{})); err != nil {
 		t.Fatalf("initial Fetch() error = %v", err)
 	}
 	prSHA = revParse(t, ctx, localRepo.Client, "refs/remotes/origin/pr/12")
@@ -257,7 +257,7 @@ func TestCreateWorktreeDefaultFlagCreatesTheBranchAtHEAD(t *testing.T) {
 	}
 
 	wt := filepath.Join(t.TempDir(), "wt")
-	if err := repo.Client.CreateWorktree(ctx, wt, "feature", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wt, "feature", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestCreateWorktreeDefaultFlagCreatesTheBranchAtHEAD(t *testing.T) {
 
 	// -b is create-ONLY: attempting it again on the same branch must fail.
 	wt2 := filepath.Join(t.TempDir(), "wt2")
-	if err := repo.Client.CreateWorktree(ctx, wt2, "feature", gitclient.CreateWorktreeOptions{}); err == nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wt2, "feature", gitclient.CreateWorktreeOptions{})); err == nil {
 		t.Error("CreateWorktree() a second time on the same branch (default -b) = nil error, want it to refuse an already-existing branch")
 	}
 }
@@ -289,7 +289,7 @@ func TestCreateWorktreeResetBranchOptionResetsAnExistingBranchToANewStartPoint(t
 	}
 
 	wt1 := filepath.Join(t.TempDir(), "wt1")
-	if err := repo.Client.CreateWorktree(ctx, wt1, "feature", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wt1, "feature", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 	if got := revParse(t, ctx, repo.Client, "feature"); got != sha1 {
@@ -309,10 +309,10 @@ func TestCreateWorktreeResetBranchOptionResetsAnExistingBranchToANewStartPoint(t
 	}
 
 	wt2 := filepath.Join(t.TempDir(), "wt2")
-	if err := repo.Client.CreateWorktree(ctx, wt2, "feature", gitclient.CreateWorktreeOptions{
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wt2, "feature", gitclient.CreateWorktreeOptions{
 		ResetBranch: true,
 		StartPoint:  sha2,
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("CreateWorktree(ResetBranch, StartPoint=%s) error = %v", sha2, err)
 	}
 
@@ -334,7 +334,7 @@ func TestRemoveWorktreeWithoutForceFailsOnADirtyWorktree(t *testing.T) {
 	}
 
 	wt := filepath.Join(t.TempDir(), "wt")
-	if err := repo.Client.CreateWorktree(ctx, wt, "dirty-branch", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wt, "dirty-branch", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 
@@ -389,7 +389,7 @@ func TestPruneWorktreesRemovesStaleAdministrativeEntries(t *testing.T) {
 	}
 
 	wt := filepath.Join(t.TempDir(), "prune-me")
-	if err := repo.Client.CreateWorktree(ctx, wt, "prune-me", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wt, "prune-me", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 	if err := os.RemoveAll(wt); err != nil {
@@ -435,7 +435,7 @@ func TestDeleteBranchWithoutForceFailsOnAnUnmergedBranch(t *testing.T) {
 	// it without touching main's own checkout, then remove that worktree --
 	// the branch's tip commit is now genuinely NOT reachable from main.
 	wt := filepath.Join(t.TempDir(), "wt-unmerged")
-	if err := repo.Client.CreateWorktree(ctx, wt, "unmerged", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wt, "unmerged", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 	wtClient, err := gitclient.New(ctx, wt)

@@ -86,7 +86,7 @@ func TestClientMutationsStayInsideASymlinkedFixtureRootDespiteHostileAmbientGitD
 	// The guarantee: Client mutation methods land in the fixture, not the
 	// ancestor, despite the hostile ambient env remaining set throughout.
 	wtPath := filepath.Join(t.TempDir(), "wt")
-	if err := repo.Client.CreateWorktree(ctx, wtPath, "feature", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wtPath, "feature", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(wtPath, ".git")); statErr != nil {

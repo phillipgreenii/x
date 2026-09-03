@@ -1,6 +1,12 @@
 package gitclient
 
-import "strings"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"strings"
+)
 
 // classify turns a failed git invocation into an error. It is pure -- no
 // subprocess, no I/O -- so unit tests can exercise every mapping without
@@ -31,4 +37,32 @@ func classify(args []string, exitCode int, stderr []byte) error {
 		ExitCode: exitCode,
 		Stderr:   strings.TrimRight(string(stderr), "\n"),
 	}
+}
+
+// classifyRunErr turns cmd.Wait()'s returned error into the exact
+// ctx-error/*GitError result client.go's run has always produced (its own
+// doc comment carries the full context-contract rationale) -- extracted
+// so run's buffered spawn and Handle's streaming spawn (newHandle) apply
+// IDENTICAL classification instead of two copies that could drift apart.
+//
+// runErr == nil returns nil immediately. Otherwise ctx is consulted
+// independently of what runErr happens to be: once a child has actually
+// been signaled, os/exec's Cmd.Wait prefers the process's own exit status
+// over the context's error, so ctx.Err() must be checked explicitly on
+// every failure path rather than inferred from runErr's shape (run's own
+// doc comment explains this in full). Only once ctx reports no error is
+// runErr classified as an *exec.ExitError (via classify) or, failing
+// that, wrapped as a generic spawn error.
+func classifyRunErr(ctx context.Context, args []string, stderr []byte, runErr error) error {
+	if runErr == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("gitclient: git %s: %w: %w", strings.Join(args, " "), ctxErr, runErr)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		return classify(args, exitErr.ExitCode(), stderr)
+	}
+	return fmt.Errorf("gitclient: git %s: %w", strings.Join(args, " "), runErr)
 }

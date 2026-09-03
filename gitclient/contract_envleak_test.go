@@ -118,7 +118,7 @@ func TestMutatingVerbsAreImmuneToAmbientGitDirFamilyAndConfigInjection(t *testin
 	if _, err := repo.Client.Run(ctx, "push", "origin", "HEAD:refs/heads/main"); err != nil {
 		t.Fatalf("pushing seed to bare remote: %v", err)
 	}
-	if err := repo.Client.Fetch(ctx, gitclient.FetchOptions{}); err != nil {
+	if err := waitHandle(repo.Client.Fetch(ctx, gitclient.FetchOptions{})); err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
 	if got := mustRevParse(t, ctx, repo.Client, "refs/remotes/origin/main"); got != seedSHA {
@@ -127,7 +127,7 @@ func TestMutatingVerbsAreImmuneToAmbientGitDirFamilyAndConfigInjection(t *testin
 
 	// WorktreeManager: CreateWorktree / RemoveWorktree
 	wtPath := filepath.Join(t.TempDir(), "wt")
-	if err := repo.Client.CreateWorktree(ctx, wtPath, "wt-branch", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wtPath, "wt-branch", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(wtPath, ".git")); statErr != nil {
@@ -142,7 +142,7 @@ func TestMutatingVerbsAreImmuneToAmbientGitDirFamilyAndConfigInjection(t *testin
 
 	// WorktreeManager: PruneWorktrees
 	wtStale := filepath.Join(t.TempDir(), "stale-wt")
-	if err := repo.Client.CreateWorktree(ctx, wtStale, "stale-branch", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wtStale, "stale-branch", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree(stale) error = %v", err)
 	}
 	if err := os.RemoveAll(wtStale); err != nil {

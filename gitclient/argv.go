@@ -210,3 +210,94 @@ func resetHardArgs() verbArgs {
 func cleanUntrackedArgs() verbArgs {
 	return verbArgs{Args: []string{"clean", "-fd"}, Parsed: false}
 }
+
+// --- Syncer ---
+
+// syncArgs builds either `rebase --autostash <onto>` (opts.Onto set) or
+// `pull --rebase --autostash` (opts.Onto empty) -- Syncer.Sync. Both run
+// hooks synchronously (post-checkout et al, same as worktreeAddArgs), so
+// Parsed is false.
+func syncArgs(opts SyncOptions) verbArgs {
+	if opts.Onto != "" {
+		return verbArgs{Args: []string{"rebase", "--autostash", opts.Onto}, Parsed: false}
+	}
+	return verbArgs{Args: []string{"pull", "--rebase", "--autostash"}, Parsed: false}
+}
+
+// --- Committer ---
+
+// restorePathArgs builds `checkout -- <path>` (Committer.RestorePath).
+// The "--" here is not a defensive guard added by this package -- it is
+// how `checkout <path>` (restore a path from HEAD) is spelled at all,
+// disambiguating a path from a branch name.
+func restorePathArgs(path string) verbArgs {
+	return verbArgs{Args: []string{"checkout", "--", path}, Parsed: false}
+}
+
+// addArgs builds `add -- <paths...>` (Committer.Add). The "--" guards
+// against a path that happens to begin with '-' being misread as an
+// option, the same defensive idiom cloneArgs/addRemoteArgs apply to
+// their own user-supplied positional arguments.
+func addArgs(paths ...string) verbArgs {
+	args := append([]string{"add", "--"}, paths...)
+	return verbArgs{Args: args, Parsed: false}
+}
+
+// commitArgs builds `commit -m <message>` (Committer.Commit). Parsed is
+// false: commit runs the commit-msg/post-commit hooks synchronously, and
+// LC_ALL=C must not leak into them (design §4.4's SCOPED, not blanket
+// rule).
+func commitArgs(message string) verbArgs {
+	return verbArgs{Args: []string{"commit", "-m", message}, Parsed: false}
+}
+
+// --- Pusher ---
+
+// pushArgs builds `push [--no-verify]` or, when opts.SetUpstream is set,
+// `push [--no-verify] -u <remote> <branch>` (Pusher.Push).
+func pushArgs(opts PushOptions) verbArgs {
+	args := []string{"push"}
+	if opts.NoVerify {
+		args = append(args, "--no-verify")
+	}
+	if opts.SetUpstream {
+		args = append(args, "-u", opts.Remote, opts.Branch)
+	}
+	return verbArgs{Args: args, Parsed: false}
+}
+
+// --- Clone ---
+
+// cloneArgs builds `clone [--branch <branch>] -- <url> <dir>` (the Clone
+// constructor). "--" terminates option parsing so a URL beginning with
+// '-' cannot be misread as a git option -- the same guard pn's own
+// clone.go applies today (bead pg2-3j8b2); --branch's value is consumed
+// by the option itself, so (per that same bead's note) it needs no such
+// guard.
+func cloneArgs(url, dir, branch string) verbArgs {
+	args := []string{"clone"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, "--", url, dir)
+	return verbArgs{Args: args, Parsed: false}
+}
+
+// --- RemoteManager ---
+
+// addRemoteArgs builds `remote add -- <name> <url>` (RemoteManager.
+// AddRemote) -- Clone's companion for a multi-remote CloneOptions
+// configuration, mirroring pn's own clone.go "--" guard on the URL.
+func addRemoteArgs(name, url string) verbArgs {
+	return verbArgs{Args: []string{"remote", "add", "--", name, url}, Parsed: false}
+}
+
+// --- BranchLister ---
+
+// listBranchesArgs builds `branch --format=%(refname:short)`
+// (BranchLister.ListBranches) -- the concrete production call site
+// behind pn's own workspace/status.go localBranches gap (design doc
+// pg2-migib §2).
+func listBranchesArgs() verbArgs {
+	return verbArgs{Args: []string{"branch", "--format=%(refname:short)"}, Parsed: true}
+}

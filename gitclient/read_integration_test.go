@@ -220,7 +220,7 @@ func TestHasUpstreamFalseWithoutOneTrueOnceOneIsConfigured(t *testing.T) {
 		t.Errorf("HasUpstream() before any fetch/tracking setup = (%v, %v), want (false, nil)", ok, err)
 	}
 
-	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{}); err != nil {
+	if err := waitHandle(local.Client.Fetch(ctx, gitclient.FetchOptions{})); err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
 	if _, err := local.Client.Run(ctx, "checkout", "-b", "main", "--track", "origin/main"); err != nil {
@@ -260,7 +260,7 @@ func TestHasUpstreamFalseForADanglingUpstreamConfig(t *testing.T) {
 	if _, err := local.Client.Run(ctx, "remote", "add", "origin", bareRemote.Dir); err != nil {
 		t.Fatalf("remote add: %v", err)
 	}
-	if err := local.Client.Fetch(ctx, gitclient.FetchOptions{}); err != nil {
+	if err := waitHandle(local.Client.Fetch(ctx, gitclient.FetchOptions{})); err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
 	if _, err := local.Client.Run(ctx, "checkout", "-b", "main", "--track", "origin/main"); err != nil {
@@ -819,7 +819,7 @@ func TestToplevelAndCommonDirDifferBetweenALinkedWorktreeAndItsCanonicalClone(t 
 	}
 
 	wtPath := filepath.Join(t.TempDir(), "linked-wt")
-	if err := repo.Client.CreateWorktree(ctx, wtPath, "feature", gitclient.CreateWorktreeOptions{}); err != nil {
+	if err := waitHandle(repo.Client.CreateWorktree(ctx, wtPath, "feature", gitclient.CreateWorktreeOptions{})); err != nil {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 	wtClient, err := gitclient.New(ctx, wtPath)

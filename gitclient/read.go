@@ -14,15 +14,16 @@ func trimTrailingNewline(s string) string {
 	return strings.TrimRight(s, "\n")
 }
 
-// Compile-time assertions that Client satisfies the four read-side role
+// Compile-time assertions that Client satisfies the read-side role
 // interfaces this file implements. The mutating roles' assertions
-// (Fetcher, WorktreeManager, BranchManager, Cleaner) live in mutate.go
-// (bead pg2-svfbb.5).
+// (Fetcher, WorktreeManager, BranchManager, Cleaner, Syncer, Committer,
+// Pusher, RemoteManager) live in mutate.go (bead pg2-svfbb.5 / pg2-f1cq7).
 var (
 	_ Locator       = (*Client)(nil)
 	_ RefReader     = (*Client)(nil)
 	_ StatusReader  = (*Client)(nil)
 	_ HistoryReader = (*Client)(nil)
+	_ BranchLister  = (*Client)(nil)
 )
 
 // --- Locator ---
@@ -224,4 +225,18 @@ func (c *Client) ChangedFiles(ctx context.Context, base string) ([]FileChange, e
 		return nil, err
 	}
 	return parseNumstat(out)
+}
+
+// --- BranchLister ---
+
+// ListBranches runs `branch --format=%(refname:short)` (listBranchesArgs)
+// and returns one entry per local branch (parseBranchList). An empty
+// repository with no branches yet (unborn HEAD) returns an empty slice,
+// not an error.
+func (c *Client) ListBranches(ctx context.Context) ([]string, error) {
+	out, err := c.run(ctx, listBranchesArgs())
+	if err != nil {
+		return nil, err
+	}
+	return parseBranchList(out), nil
 }

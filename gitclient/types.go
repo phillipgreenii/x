@@ -108,3 +108,30 @@ type CreateWorktreeOptions struct {
 	StartPoint  string // optional commit-ish
 	ResetBranch bool   // use -B instead of -b: create OR reset the branch (pr-pool redispatch)
 }
+
+// SyncOptions configures Syncer.Sync. Onto's presence selects between the
+// two shapes pn's own rebase.go models today (design doc pg2-migib §3):
+// empty (the default) runs `pull --rebase --autostash` against the
+// branch's configured upstream; a non-empty Onto instead runs `rebase
+// --autostash <onto>` against that explicit local ref, with no fetch/pull.
+type SyncOptions struct {
+	Onto string
+}
+
+// PushOptions configures Pusher.Push. The zero value runs a plain `push`
+// (the branch already has a configured upstream). SetUpstream selects
+// `push -u <remote> <branch>` instead, for a branch with no upstream yet
+// -- Remote and Branch are then REQUIRED: resolving which remote to
+// publish to is left to the caller (see the design note on Pusher in
+// interfaces.go), not derived here.
+type PushOptions struct {
+	SetUpstream bool
+	Remote      string // required when SetUpstream is true
+	Branch      string // required when SetUpstream is true
+	NoVerify    bool   // pass --no-verify, skipping the repo's pre-push hook
+}
+
+// CloneOptions configures the Clone constructor. All fields optional.
+type CloneOptions struct {
+	Branch string // optional --branch <branch>; empty clones the remote's default branch
+}
