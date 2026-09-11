@@ -143,7 +143,7 @@ func setupAnchoredClient(dir string, opts []Option, prepare func(cfg *config, gi
 
 // New anchors a client at dir, which MUST be inside a git repository
 // (ErrNotARepository otherwise -- callers use that as the cheap "is this
-// a worktree?" probe, e.g. pr-pool's idempotent Ensure). Validation spawns
+// a worktree?" probe, e.g. pg-router's idempotent Ensure). Validation spawns
 // git, so New takes a context like every other call. dir is resolved to
 // an absolute path (symlinks resolved) at construction so a later process
 // chdir cannot shift the anchor. New anchors exactly where told -- a

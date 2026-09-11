@@ -865,7 +865,7 @@ func TestToplevelAndCommonDirDifferBetweenALinkedWorktreeAndItsCanonicalClone(t 
 // TestNewAtANonRepositoryPathReturnsErrNotARepository exercises New's
 // existing (bead pg2-svfbb.2) validation as part of this bead's coverage,
 // per design §6: it is a load-bearing control-flow probe for a future
-// consumer (pr-pool's idempotent Ensure), so a regression here would be
+// consumer (pg-router's idempotent Ensure), so a regression here would be
 // silent for this bead's own methods but break that caller.
 func TestNewAtANonRepositoryPathReturnsErrNotARepository(t *testing.T) {
 	ctx := t.Context()

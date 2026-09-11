@@ -279,7 +279,7 @@ func TestCreateWorktreeDefaultFlagCreatesTheBranchAtHEAD(t *testing.T) {
 // covers -B (create-or-reset): after the original worktree using "feature"
 // is removed, redispatching with ResetBranch and a new StartPoint must
 // move the EXISTING branch to that new commit, not merely leave it as it
-// was -- pr-pool's redispatch case.
+// was -- pg-router's redispatch case.
 func TestCreateWorktreeResetBranchOptionResetsAnExistingBranchToANewStartPoint(t *testing.T) {
 	ctx := t.Context()
 	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "worktree-create-B"})

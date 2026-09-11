@@ -106,7 +106,7 @@ type FetchOptions struct {
 // the required path and branch are positional parameters.
 type CreateWorktreeOptions struct {
 	StartPoint  string // optional commit-ish
-	ResetBranch bool   // use -B instead of -b: create OR reset the branch (pr-pool redispatch)
+	ResetBranch bool   // use -B instead of -b: create OR reset the branch (pg-router redispatch)
 }
 
 // SyncOptions configures Syncer.Sync. Onto's presence selects between the

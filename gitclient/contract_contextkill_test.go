@@ -3,7 +3,7 @@
 package gitclient
 
 // Contract test 4 (design §6, epic pg2-svfbb): the context contract's
-// bounded-kill requirement (pr-pool watchdog's bounded-probe need, pg2-
+// bounded-kill requirement (pg-router watchdog's bounded-probe need, pg2-
 // yy42). A git invocation that is genuinely still running when its
 // context is canceled/deadlined must be killed PROMPTLY -- bounded by
 // client.go's defaultWaitDelay, not left to run to completion -- and the

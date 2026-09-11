@@ -33,7 +33,7 @@ func (c *Client) Fetch(ctx context.Context, opts FetchOptions) (*Handle, error) 
 
 // CreateWorktree runs `git worktree add` (worktreeAddArgs): -b (create
 // only, the default) or -B (create-or-reset, when opts.ResetBranch is set --
-// pr-pool's redispatch case) at opts.StartPoint if given. Streams via
+// pg-router's redispatch case) at opts.StartPoint if given. Streams via
 // startHandle (bead pg2-f1cq7).
 func (c *Client) CreateWorktree(ctx context.Context, path, branch string, opts CreateWorktreeOptions) (*Handle, error) {
 	return c.startHandle(ctx, worktreeAddArgs(path, branch, opts))

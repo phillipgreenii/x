@@ -4,7 +4,7 @@ import "context"
 
 // Each method's trailing comment names the plumbing it wraps. The set is
 // derived from a workspace-wide call-site audit (epic pg2-67h4y design
-// field) plus a review pass over pr-pool's internal/worktree and executor
+// field) plus a review pass over pg-router's internal/worktree and executor
 // wiring: every production call site lands on a role, and no method exists
 // without a current consumer -- notably there is NO standalone
 // CreateBranch, since every branch creation in production Go today is

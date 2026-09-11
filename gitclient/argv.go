@@ -162,7 +162,7 @@ func fetchArgs(opts FetchOptions) verbArgs {
 
 // worktreeAddArgs builds `worktree add [-b|-B] <branch> <path>
 // [<start-point>]` (WorktreeManager.CreateWorktree). ResetBranch selects -B
-// (create the branch, or reset it if it already exists -- pr-pool's
+// (create the branch, or reset it if it already exists -- pg-router's
 // redispatch case) over the default -b (create only, fails if the branch
 // already exists).
 func worktreeAddArgs(path, branch string, opts CreateWorktreeOptions) verbArgs {
