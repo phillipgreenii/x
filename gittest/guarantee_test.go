@@ -92,7 +92,8 @@ func TestGuarantee1HomeAndSystemConfigIsolation(t *testing.T) {
 	// Control: the same hostile config, read directly by a client that
 	// does NOT set GIT_CONFIG_NOSYSTEM, DOES see it -- proving the
 	// GIT_CONFIG_SYSTEM injection is a real leak path too.
-	plain2, err := gitclient.Init(ctx, t.TempDir(), gitclient.InitOptions{},
+	plain2, err := gitclient.Init(
+		ctx, t.TempDir(), gitclient.InitOptions{},
 		gitclient.WithEnv("GIT_CONFIG_SYSTEM", hostileSystemConfig),
 	)
 	if err != nil {
@@ -103,7 +104,8 @@ func TestGuarantee1HomeAndSystemConfigIsolation(t *testing.T) {
 		t.Fatalf("control: client with GIT_CONFIG_SYSTEM set (no NOSYSTEM) did not observe the hostile alias (out=%q, err=%v); the decoy setup is not exercising anything", out2, err)
 	}
 
-	c2, err := gitclient.Init(ctx, filepath.Join(resolvedRoot2, "repo"), gitclient.InitOptions{},
+	c2, err := gitclient.Init(
+		ctx, filepath.Join(resolvedRoot2, "repo"), gitclient.InitOptions{},
 		gitclient.WithHome(home2),
 		gitclient.WithoutInherited("SSH_AUTH_SOCK"),
 		gitclient.WithCeiling(resolvedRoot2),

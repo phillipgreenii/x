@@ -51,7 +51,8 @@ func TestAllowlistCompletenessAgainstTheClientsOwnChildEnv(t *testing.T) {
 		t.Fatalf("LookPath(git): %v", err)
 	}
 
-	c, err := Init(ctx, t.TempDir(), InitOptions{},
+	c, err := Init(
+		ctx, t.TempDir(), InitOptions{},
 		WithGit(gitPath),
 		WithEnv("GITCLIENT_CONTRACT_EXTRA", "extra-value"),
 	)

@@ -192,12 +192,14 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (*Telemetry, error) {
 
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithBatcher(traceExp,
+		sdktrace.WithBatcher(
+			traceExp,
 			sdktrace.WithMaxQueueSize(o.spanQueueSize),
 			sdktrace.WithExportTimeout(o.timeout),
 		),
 	)
-	reader := sdkmetric.NewPeriodicReader(metricExp,
+	reader := sdkmetric.NewPeriodicReader(
+		metricExp,
 		sdkmetric.WithInterval(o.metricInterval),
 		sdkmetric.WithTimeout(o.timeout),
 	)
