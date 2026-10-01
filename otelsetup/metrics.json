@@ -1,0 +1,22 @@
+[
+  {
+    "name": "pn.command.duration",
+    "unit": "s",
+    "kind": "histogram"
+  },
+  {
+    "name": "nix.invocation.duration",
+    "unit": "s",
+    "kind": "histogram"
+  },
+  {
+    "name": "nix.build.duration",
+    "unit": "s",
+    "kind": "histogram"
+  },
+  {
+    "name": "nix.derivations",
+    "unit": "{derivation}",
+    "kind": "counter"
+  }
+]

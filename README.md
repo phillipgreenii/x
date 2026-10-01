@@ -19,6 +19,12 @@ There are no release tags; pin a commit and bump it like any other dependency.
 - **`osdirs`** — resolves an app's XDG state/config directory, falling back to `$HOME` when the
   corresponding environment variable isn't set. Use it whenever a tool needs a per-app directory
   under `~/.local/state` or `~/.config`.
+- **`otelsetup`** — OpenTelemetry tracing and metrics setup for short-lived CLI processes
+  exporting to a local OTLP/HTTP collector: `Init(ctx, Config{Endpoint, ServiceName, Version})`
+  returns a tracer, meter, and bounded `ForceFlush`/`Shutdown`. It is a no-op (no network) when the
+  endpoint is empty, uses delta metric temporality and explicit second-based histogram buckets, and
+  ships a generated `metrics.json` catalog of metric names and units (`go generate ./otelsetup`).
+  Importing it pulls the OTel modules into your `go.mod`; other packages are unaffected.
 
 ## Testing
 
