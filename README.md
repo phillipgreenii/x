@@ -43,10 +43,22 @@ go test -race -tags integration,contract ./...
   that a canceled/deadlined context kills a blocked git invocation promptly.
 
 All three commands run in CI on every push (`.github/workflows/ci.yml`) — that's this repo's only
-gate; there's no nix flake here. The `integration`/`contract` suites need a real `git` binary on
+gate. The `flake.nix` here exists solely for formatting (see below). The `integration`/`contract` suites need a real `git` binary on
 PATH (present on GitHub's `ubuntu-latest` runners); a consumer's own `nix flake check` never runs
 them — only this repo's own CI does.
 
 CI also runs a coverage gate (`.github/scripts/check-coverage.sh`): the whole-module aggregate
 coverage from `go test -race -tags=integration,contract -coverpkg=./...` (all three tiers'
 statements combined, not any single package's own view) must be at least 90.0%, or the job fails.
+
+## Formatting
+
+`flake.nix` imports `phillipg-nix-repo-base`'s `flakeModules.treefmt`, so formatting uses the same
+treefmt program set and settings as every other workspace repo (gofumpt, nixfmt, prettier for
+md/yaml/json, shellcheck, shfmt). It builds nothing, so Go consumers of this module are unaffected.
+
+- Apply: `nix fmt`
+- Check (no changes): `nix flake check` (runs `checks.treefmt`)
+
+CI does not run a format check (deliberately unchanged). A pre-commit/prek hook module is not
+adopted; the treefmt config is what a quiet pre-commit-fix hookpoint would invoke.
