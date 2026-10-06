@@ -44,6 +44,18 @@ func (c *Client) CreateWorktree(ctx context.Context, path, branch string, opts C
 // (uncommitted changes); that failure is not swallowed here -- like any
 // other non-zero exit it flows through run/classify, so callers observe it
 // as a *GitError via errors.As.
+//
+// Ruling (bead pg2-73nc4, 2026-10-06): RemoveWorktree performs NO
+// process-liveness check, deliberately. It does not look for processes whose
+// working directory is inside path, so there is no blocking-process list here
+// to share with wtdone's allow-list (bead pg2-qs7lp). The word "anchor" in
+// this package names the Client's own pinned working directory (design §4.4
+// D2), unrelated to wtdone's "process anchored in the worktree" probe. The
+// only refusals are git's own (dirty or locked worktree). A caller that must
+// not delete a worktree under a running process owns that guard itself (the
+// wtdone and pnwf tools do), and SHOULD apply an allow-list of blocking
+// process kinds rather than block on every process anchored there, so that a
+// timer or language server does not stall a safe teardown.
 func (c *Client) RemoveWorktree(ctx context.Context, path string, force bool) error {
 	_, err := c.run(ctx, worktreeRemoveArgs(path, force))
 	return err

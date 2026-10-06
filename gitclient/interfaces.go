@@ -60,7 +60,8 @@ type Fetcher interface {
 // CreateWorktree streams for the same reason Fetch does; RemoveWorktree
 // and PruneWorktrees are UNCHANGED (no streaming need -- neither runs
 // long enough for live progress to matter to any current or anticipated
-// caller).
+// caller). RemoveWorktree does no process-liveness check of its own (see
+// Client.RemoveWorktree); that guard belongs to the caller.
 type WorktreeManager interface {
 	CreateWorktree(ctx context.Context, path, branch string, opts CreateWorktreeOptions) (*Handle, error) // worktree add [-b|-B]
 	RemoveWorktree(ctx context.Context, path string, force bool) error
