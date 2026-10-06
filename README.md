@@ -25,6 +25,12 @@ There are no release tags; pin a commit and bump it like any other dependency.
   endpoint is empty, uses delta metric temporality and explicit second-based histogram buckets, and
   ships a generated `metrics.json` catalog of metric names and units (`go generate ./otelsetup`).
   Importing it pulls the OTel modules into your `go.mod`; other packages are unaffected.
+- **`gitclient`** — a git CLI client with an allowlisted child environment (only `PATH`, `HOME`,
+  `SSH_AUTH_SOCK` are inherited, so an ambient `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` can never
+  redirect it). `Client.Run(ctx, args...)` is the escape hatch for any verb.
+- **`gitfixture`** / **`gittest`** — hermetic, real git repositories for tests. Tests that need git
+  MUST use these rather than hand-rolling `git init` or `exec.Command("git", ...)`. See
+  [Git fixtures](#git-fixtures).
 
 ## Testing
 
@@ -50,6 +56,38 @@ them — only this repo's own CI does.
 CI also runs a coverage gate (`.github/scripts/check-coverage.sh`): the whole-module aggregate
 coverage from `go test -race -tags=integration,contract -coverpkg=./...` (all three tiers'
 statements combined, not any single package's own view) must be at least 90.0%, or the job fails.
+
+## Git fixtures
+
+`gittest.New(t, gitfixture.RepoOptions{})` returns a `*gitfixture.Repo` (`Dir`, `Client`) backed by a
+real git repository under `t.TempDir()`. It is hermetic by construction: `HOME` is a fresh empty
+directory, there is no system config, `GIT_CEILING_DIRECTORIES` is the fixture root, hooks are
+redirected to an empty directory, the commit identity is `gitfixture <Suite>`, and the child
+environment is an allowlist, so a hostile ambient `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` or
+`GIT_CONFIG_*` cannot reach (or be written into) a real repository. `gitfixture` is the same thing
+without the `testing` import, for non-test helpers.
+
+| Need                                                                                                                | Use                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Any git verb (worktree add/lock, switch -c, merge --ff-only, branch, config, rev-parse, checkout, push, fetch, ...) | `repo.Client.Run(ctx, args...)` — anchored at the repo, hermetic environment. No separate runner exists on purpose.   |
+| Write / commit files                                                                                                | `repo.WriteFile(rel, content)`, `repo.Commit(ctx, msg, files)`                                                        |
+| An initial commit on the initial branch                                                                             | `RepoOptions{InitialCommit: true}` (one empty commit; not valid with `Bare`)                                          |
+| A bare remote                                                                                                       | `repo.AddBareRemote(ctx, "origin")` (also registers it as a remote of `repo`)                                         |
+| Clone a repo or remote into a working repo                                                                          | `repo.Clone(ctx, name)` / `gittest.Clone(t, src, name)`                                                               |
+| Several named repos under one root                                                                                  | `RepoOptions{Name: "alpha"}`, then `repo.NewSibling(ctx, "beta", opts)` / `gittest.NewSibling(t, repo, "beta", opts)` |
+| A git dir outside the work tree                                                                                     | `RepoOptions{SeparateGitDir: "gitdirs/repo.git"}` (relative to the fixture root)                                      |
+| A path beside the repo (worktree target)                                                                            | `repo.Root()`, `repo.RootPath(rel)` — containment-checked against the fixture root                                    |
+
+Notes:
+
+- The repository lives at `<root>/<Name>` (default `<root>/repo`); `<root>/home`, `<root>/hooks` and
+  `<root>/remotes` are fixture infrastructure and cannot be used as a `Name`.
+- `Name`, `SeparateGitDir`, `RootPath` and `Clone`'s name are containment-checked: anything that
+  would escape the fixture root is rejected. An explicitly named repository must not already exist.
+- A clone of a bare remote from `AddBareRemote` lands under that remote's own nested fixture root.
+- Run arbitrary git through `Client.Run` only with paths from `Root`/`RootPath`/`Dir`. `Run` is
+  anchored at the repo and hermetic, but it cannot stop a caller from passing an outside path as an
+  argument.
 
 ## Formatting
 

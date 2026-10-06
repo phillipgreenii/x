@@ -52,6 +52,15 @@ type Client struct {
 type InitOptions struct {
 	Bare          bool
 	InitialBranch string // default "main"
+
+	// SeparateGitDir, when non-empty, places the repository's git
+	// directory at that path instead of <dir>/.git (git init
+	// --separate-git-dir); <dir>/.git becomes a "gitdir:" file pointing
+	// there. Pass an ABSOLUTE path: a relative one is resolved by git
+	// against the process working directory it runs in (dir), which is
+	// rarely what a caller means. Incompatible with Bare -- git itself
+	// rejects the combination and Init surfaces that error.
+	SeparateGitDir string
 }
 
 // buildClientConfig applies opts to a fresh config and resolves the git
@@ -190,6 +199,9 @@ func Init(ctx context.Context, dir string, init InitOptions, opts ...Option) (*C
 	args := []string{"init", "--initial-branch=" + branch}
 	if init.Bare {
 		args = append(args, "--bare")
+	}
+	if init.SeparateGitDir != "" {
+		args = append(args, "--separate-git-dir="+init.SeparateGitDir)
 	}
 	// `init` is a mutation, not one of the parsed verbs the environment
 	// contract names (design §4.4) -- Parsed: false, so LC_ALL=C is not

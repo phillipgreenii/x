@@ -32,3 +32,30 @@ func New(t *testing.T, opts gitfixture.RepoOptions) *gitfixture.Repo {
 	}
 	return repo
 }
+
+// NewSibling creates a further fixture repository named name beside
+// parent, under the same fixture root (see gitfixture.Repo.NewSibling and
+// RepoOptions.Name), failing the test immediately on error. If opts.Suite
+// is empty it is inherited from parent.
+func NewSibling(t *testing.T, parent *gitfixture.Repo, name string, opts gitfixture.RepoOptions) *gitfixture.Repo {
+	t.Helper()
+
+	repo, err := parent.NewSibling(t.Context(), name, opts)
+	if err != nil {
+		t.Fatalf("gittest.NewSibling(%q): %v", name, err)
+	}
+	return repo
+}
+
+// Clone clones src (typically a bare remote from AddBareRemote) into a new
+// working repository named name (see gitfixture.Repo.Clone), failing the
+// test immediately on error.
+func Clone(t *testing.T, src *gitfixture.Repo, name string) *gitfixture.Repo {
+	t.Helper()
+
+	repo, err := src.Clone(t.Context(), name)
+	if err != nil {
+		t.Fatalf("gittest.Clone(%q): %v", name, err)
+	}
+	return repo
+}

@@ -93,6 +93,47 @@ func TestInitBareCreatesBareRepository(t *testing.T) {
 	}
 }
 
+func TestInitSeparateGitDirKeepsTheGitDirOutsideTheWorkTree(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	gitDir := filepath.Join(t.TempDir(), "elsewhere.git")
+
+	c, err := Init(ctx, dir, InitOptions{SeparateGitDir: gitDir})
+	if err != nil {
+		t.Fatalf("Init(SeparateGitDir) error = %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, ".git"))
+	if err != nil {
+		t.Fatalf("stat <dir>/.git: %v", err)
+	}
+	if info.IsDir() {
+		t.Error("<dir>/.git is a directory, want a \"gitdir:\" file when --separate-git-dir is used")
+	}
+	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err != nil {
+		t.Errorf("separate git dir has no HEAD: %v", err)
+	}
+
+	out, err := c.Run(ctx, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		t.Fatalf("Run(rev-parse --absolute-git-dir) error = %v", err)
+	}
+	want, err := filepath.EvalSymlinks(gitDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", gitDir, err)
+	}
+	if got := strings.TrimRight(string(out), "\n"); got != want {
+		t.Errorf("--absolute-git-dir = %q, want %q", got, want)
+	}
+}
+
+func TestInitSeparateGitDirWithBareIsRejectedByGit(t *testing.T) {
+	_, err := Init(t.Context(), t.TempDir(), InitOptions{Bare: true, SeparateGitDir: filepath.Join(t.TempDir(), "g.git")})
+	if err == nil {
+		t.Fatal("Init(Bare + SeparateGitDir) error = nil, want git's rejection of the combination")
+	}
+}
+
 func TestNewAnchorsAtAnExistingRepository(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()

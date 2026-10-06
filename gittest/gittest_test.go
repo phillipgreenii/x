@@ -118,3 +118,39 @@ func TestAddBareRemoteRegistersAFetchableRemote(t *testing.T) {
 		t.Errorf("remote --is-bare-repository = %q, want %q", got, "true")
 	}
 }
+
+func TestNewSiblingAndNamedReposShareOneRoot(t *testing.T) {
+	alpha := gittest.New(t, gitfixture.RepoOptions{Suite: "siblings", Name: "alpha", InitialCommit: true})
+	beta := gittest.NewSibling(t, alpha, "beta", gitfixture.RepoOptions{InitialCommit: true})
+
+	if filepath.Base(alpha.Dir) != "alpha" || filepath.Base(beta.Dir) != "beta" {
+		t.Errorf("repo dirs = %q, %q, want .../alpha and .../beta", alpha.Dir, beta.Dir)
+	}
+	if filepath.Dir(alpha.Dir) != filepath.Dir(beta.Dir) {
+		t.Errorf("alpha (%s) and beta (%s) do not share a parent directory", alpha.Dir, beta.Dir)
+	}
+}
+
+func TestCloneRoundTripsThroughABareRemote(t *testing.T) {
+	ctx := t.Context()
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "clone-owner", InitialCommit: true})
+	remote, err := repo.AddBareRemote(ctx, "origin")
+	if err != nil {
+		t.Fatalf("AddBareRemote() error = %v", err)
+	}
+	if _, err := repo.Client.Run(ctx, "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	work := gittest.Clone(t, remote, "work")
+	if _, err := os.Stat(filepath.Join(work.Dir, ".git")); err != nil {
+		t.Errorf("clone has no .git: %v", err)
+	}
+	out, err := work.Client.Run(ctx, "log", "-1", "--format=%s")
+	if err != nil {
+		t.Fatalf("log in clone: %v", err)
+	}
+	if got := strings.TrimRight(string(out), "\n"); got != "initial commit" {
+		t.Errorf("clone HEAD subject = %q, want %q", got, "initial commit")
+	}
+}

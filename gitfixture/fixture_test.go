@@ -11,6 +11,7 @@ package gitfixture_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/phillipgreenii/x/gitfixture"
@@ -102,4 +103,284 @@ func TestAddBareRemoteRejectsNameEscapingTheFixtureRoot(t *testing.T) {
 	if _, err := repo.AddBareRemote(ctx, "../../escape"); err == nil {
 		t.Fatal("AddBareRemote(\"../../escape\"): error = nil, want the containment rejection")
 	}
+}
+
+func newTestRepo(t *testing.T, opts gitfixture.RepoOptions) *gitfixture.Repo {
+	t.Helper()
+	if opts.Suite == "" {
+		opts.Suite = t.Name()
+	}
+	repo, err := gitfixture.NewRepo(t.Context(), t.TempDir(), opts)
+	if err != nil {
+		t.Fatalf("NewRepo() error = %v", err)
+	}
+	return repo
+}
+
+// TestNewRepoNameControlsTheRepoDirectory covers gap 3 (configurable repo
+// location): Name picks the directory under the fixture root.
+func TestNewRepoNameControlsTheRepoDirectory(t *testing.T) {
+	def := newTestRepo(t, gitfixture.RepoOptions{})
+	if got := filepath.Base(def.Dir); got != "repo" {
+		t.Errorf("default repo dir base = %q, want %q", got, "repo")
+	}
+
+	named := newTestRepo(t, gitfixture.RepoOptions{Name: "alpha"})
+	if got, want := named.Dir, filepath.Join(named.Root(), "alpha"); got != want {
+		t.Errorf("named repo Dir = %q, want %q", got, want)
+	}
+}
+
+func TestNewRepoRejectsBadNames(t *testing.T) {
+	for _, name := range []string{"..", ".", "a/b", "../escape", "home", "hooks", "remotes"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := gitfixture.NewRepo(t.Context(), t.TempDir(), gitfixture.RepoOptions{Suite: "badname", Name: name})
+			if err == nil {
+				t.Fatalf("NewRepo(Name=%q) error = nil, want a rejection", name)
+			}
+		})
+	}
+}
+
+func TestNewRepoRejectsAnExistingExplicitName(t *testing.T) {
+	root := t.TempDir()
+	opts := gitfixture.RepoOptions{Suite: "dup", Name: "alpha"}
+	if _, err := gitfixture.NewRepo(t.Context(), root, opts); err != nil {
+		t.Fatalf("first NewRepo() error = %v", err)
+	}
+	if _, err := gitfixture.NewRepo(t.Context(), root, opts); err == nil {
+		t.Fatal("second NewRepo() of the same explicit Name: error = nil, want an already-exists rejection")
+	}
+}
+
+// TestNewSiblingSharesTheFixtureRoot covers gap 3's multi-repo shape.
+func TestNewSiblingSharesTheFixtureRoot(t *testing.T) {
+	ctx := t.Context()
+	alpha := newTestRepo(t, gitfixture.RepoOptions{Name: "alpha"})
+
+	beta, err := alpha.NewSibling(ctx, "beta", gitfixture.RepoOptions{InitialBranch: "trunk"})
+	if err != nil {
+		t.Fatalf("NewSibling() error = %v", err)
+	}
+	if beta.Root() != alpha.Root() {
+		t.Errorf("sibling Root() = %q, want %q", beta.Root(), alpha.Root())
+	}
+	if got, want := beta.Dir, filepath.Join(alpha.Root(), "beta"); got != want {
+		t.Errorf("sibling Dir = %q, want %q", got, want)
+	}
+	if got := runGit(t, beta, "config", "--get", "user.name"); got != "gitfixture "+t.Name() {
+		t.Errorf("sibling user.name = %q, want the parent's suite to be inherited", got)
+	}
+	if got := runGit(t, beta, "branch", "--show-current"); got != "trunk" {
+		t.Errorf("sibling initial branch = %q, want %q", got, "trunk")
+	}
+
+	if _, err := alpha.NewSibling(ctx, "", gitfixture.RepoOptions{}); err == nil {
+		t.Error("NewSibling(\"\") error = nil, want a name-required rejection")
+	}
+	if _, err := alpha.NewSibling(ctx, "../escape", gitfixture.RepoOptions{}); err == nil {
+		t.Error("NewSibling(\"../escape\") error = nil, want a rejection")
+	}
+	if _, err := alpha.NewSibling(ctx, "beta", gitfixture.RepoOptions{}); err == nil {
+		t.Error("NewSibling() over an existing sibling: error = nil, want an already-exists rejection")
+	}
+}
+
+// TestInitialCommitCreatesHEAD covers gap 4.
+func TestInitialCommitCreatesHEAD(t *testing.T) {
+	repo := newTestRepo(t, gitfixture.RepoOptions{InitialCommit: true})
+
+	if got := runGit(t, repo, "rev-list", "--count", "HEAD"); got != "1" {
+		t.Errorf("commit count = %q, want 1", got)
+	}
+	if got := runGit(t, repo, "log", "-1", "--format=%s"); got != "initial commit" {
+		t.Errorf("subject = %q, want %q", got, "initial commit")
+	}
+	if got := runGit(t, repo, "branch", "--show-current"); got != "main" {
+		t.Errorf("branch = %q, want main", got)
+	}
+}
+
+func TestNoInitialCommitByDefault(t *testing.T) {
+	repo := newTestRepo(t, gitfixture.RepoOptions{})
+	if _, err := repo.Client.Run(t.Context(), "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
+		t.Error("HEAD resolves in a fresh fixture without InitialCommit, want an unborn branch")
+	}
+}
+
+func TestNewRepoRejectsInvalidBareCombinations(t *testing.T) {
+	cases := map[string]gitfixture.RepoOptions{
+		"bare+initial commit":   {Suite: "x", Bare: true, InitialCommit: true},
+		"bare+separate git dir": {Suite: "x", Bare: true, SeparateGitDir: "g.git"},
+	}
+	for name, opts := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := gitfixture.NewRepo(t.Context(), t.TempDir(), opts); err == nil {
+				t.Fatal("NewRepo() error = nil, want a rejection")
+			}
+		})
+	}
+}
+
+// TestSeparateGitDirKeepsGitDirOutsideTheWorkTree covers gap 5.
+func TestSeparateGitDirKeepsGitDirOutsideTheWorkTree(t *testing.T) {
+	repo := newTestRepo(t, gitfixture.RepoOptions{SeparateGitDir: "gitdirs/repo.git", InitialCommit: true})
+
+	info, err := os.Stat(filepath.Join(repo.Dir, ".git"))
+	if err != nil {
+		t.Fatalf("stat .git: %v", err)
+	}
+	if info.IsDir() {
+		t.Error(".git is a directory, want a gitdir: file")
+	}
+	want := filepath.Join(repo.Root(), "gitdirs", "repo.git")
+	if got := runGit(t, repo, "rev-parse", "--absolute-git-dir"); got != want {
+		t.Errorf("git dir = %q, want %q", got, want)
+	}
+	// Identity and hooks redirection were applied to the separate dir's config.
+	if got := runGit(t, repo, "log", "-1", "--format=%ae"); got != t.Name()+"@gitfixture.invalid" {
+		t.Errorf("author email = %q, want the fixture identity", got)
+	}
+}
+
+func TestSeparateGitDirRejectsUnsafeLocations(t *testing.T) {
+	for _, rel := range []string{"../outside.git", ".", "home/g.git", "hooks", "repo", "repo/inside.git"} {
+		t.Run(rel, func(t *testing.T) {
+			_, err := gitfixture.NewRepo(t.Context(), t.TempDir(), gitfixture.RepoOptions{Suite: "sgd", SeparateGitDir: rel})
+			if err == nil {
+				t.Fatalf("NewRepo(SeparateGitDir=%q) error = nil, want a rejection", rel)
+			}
+		})
+	}
+}
+
+// TestCloneProducesAHermeticWorkingRepo covers gap 2.
+func TestCloneProducesAHermeticWorkingRepo(t *testing.T) {
+	ctx := t.Context()
+	repo := newTestRepo(t, gitfixture.RepoOptions{InitialCommit: true})
+	remote, err := repo.AddBareRemote(ctx, "origin")
+	if err != nil {
+		t.Fatalf("AddBareRemote() error = %v", err)
+	}
+	if _, err := repo.Client.Run(ctx, "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	work, err := remote.Clone(ctx, "work")
+	if err != nil {
+		t.Fatalf("Clone() error = %v", err)
+	}
+	if got, want := work.Dir, filepath.Join(remote.Root(), "work"); got != want {
+		t.Errorf("clone Dir = %q, want %q", got, want)
+	}
+	if got := runGit(t, work, "remote", "get-url", "origin"); got != remote.Dir {
+		t.Errorf("clone origin = %q, want %q", got, remote.Dir)
+	}
+	if got := runGit(t, work, "rev-parse", "HEAD"); got != runGit(t, repo, "rev-parse", "HEAD") {
+		t.Errorf("clone HEAD = %q, want the pushed commit", got)
+	}
+
+	// The clone commits under the fixture identity and can push back.
+	sha, err := work.Commit(ctx, "from clone", map[string]string{"c.txt": "c\n"})
+	if err != nil {
+		t.Fatalf("clone Commit() error = %v", err)
+	}
+	if got := runGit(t, work, "log", "-1", "--format=%ae", sha); got != t.Name()+"-remote-origin@gitfixture.invalid" {
+		t.Errorf("clone commit author email = %q, want the remote's fixture identity", got)
+	}
+	if _, err := work.Client.Run(ctx, "push", "origin", "HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("clone push: %v", err)
+	}
+	if got := runGit(t, remote, "rev-parse", "main"); got != sha {
+		t.Errorf("remote main = %q, want the clone's commit %q", got, sha)
+	}
+}
+
+func TestCloneRejectsBadOrExistingNames(t *testing.T) {
+	ctx := t.Context()
+	repo := newTestRepo(t, gitfixture.RepoOptions{InitialCommit: true})
+	if _, err := repo.Clone(ctx, "../escape"); err == nil {
+		t.Error("Clone(\"../escape\") error = nil, want a rejection")
+	}
+	if _, err := repo.Clone(ctx, "repo"); err == nil {
+		t.Error("Clone() over the source repo's own directory: error = nil, want an already-exists rejection")
+	}
+}
+
+func TestCloneSurfacesAFailedClone(t *testing.T) {
+	ctx := t.Context()
+	repo := newTestRepo(t, gitfixture.RepoOptions{})
+	if err := os.RemoveAll(repo.Dir); err != nil {
+		t.Fatalf("RemoveAll(%s): %v", repo.Dir, err)
+	}
+	if _, err := repo.Clone(ctx, "work"); err == nil {
+		t.Fatal("Clone() of a vanished source: error = nil, want git's failure")
+	}
+}
+
+func TestRootPathRejectsEscapes(t *testing.T) {
+	repo := newTestRepo(t, gitfixture.RepoOptions{})
+
+	got, err := repo.RootPath("wt/feature")
+	if err != nil {
+		t.Fatalf("RootPath() error = %v", err)
+	}
+	if want := filepath.Join(repo.Root(), "wt", "feature"); got != want {
+		t.Errorf("RootPath() = %q, want %q", got, want)
+	}
+	if _, err := repo.RootPath("../escape"); err == nil {
+		t.Error("RootPath(\"../escape\") error = nil, want the containment rejection")
+	}
+}
+
+// TestRunCoversEveryOperationTheGitMigrationsNeed is the evidence for gap 1:
+// Repo.Client.Run already executes arbitrary git hermetically, so no new
+// runner is needed. Every verb the offender audit listed runs here with no
+// exec.Command and no direct git binary call.
+func TestRunCoversEveryOperationTheGitMigrationsNeed(t *testing.T) {
+	ctx := t.Context()
+	repo := newTestRepo(t, gitfixture.RepoOptions{InitialCommit: true})
+	remote, err := repo.AddBareRemote(ctx, "origin")
+	if err != nil {
+		t.Fatalf("AddBareRemote() error = %v", err)
+	}
+
+	wt, err := repo.RootPath("wt")
+	if err != nil {
+		t.Fatalf("RootPath() error = %v", err)
+	}
+	steps := [][]string{
+		{"config", "commit.gpgsign", "false"},
+		{"switch", "-c", "feature"},
+		{"branch", "other"},
+		{"checkout", "main"},
+		{"worktree", "add", wt, "-b", "wt-branch"},
+		{"worktree", "lock", wt},
+		{"worktree", "unlock", wt},
+		{"merge", "--ff-only", "feature"},
+		{"push", "origin", "main"},
+		{"fetch", "origin"},
+		{"rev-parse", "--verify", "origin/main"},
+	}
+	for _, args := range steps {
+		if _, err := repo.Client.Run(ctx, args...); err != nil {
+			t.Fatalf("Run(%v) error = %v", args, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
+		t.Errorf("worktree not created at %s: %v", wt, err)
+	}
+	if got := runGit(t, remote, "rev-parse", "main"); got != runGit(t, repo, "rev-parse", "main") {
+		t.Errorf("remote main = %q, want the pushed main", got)
+	}
+}
+
+// runGit runs git through repo's own hermetic client and returns trimmed stdout.
+func runGit(t *testing.T, repo *gitfixture.Repo, args ...string) string {
+	t.Helper()
+	out, err := repo.Client.Run(t.Context(), args...)
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimRight(string(out), "\r\n")
 }
