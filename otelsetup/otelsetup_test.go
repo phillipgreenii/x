@@ -255,6 +255,106 @@ func TestBoundedWhenCollectorHangs(t *testing.T) {
 	}
 }
 
+// refusingCollector answers the first `refuse` POSTs to each of /v1/traces and
+// /v1/metrics with HTTP 503 (the collector memory limiter's refusal), then 200.
+// Pass a negative refuse to refuse forever.
+type refusingCollector struct {
+	srv   *httptest.Server
+	mu    sync.Mutex
+	posts map[string]int
+}
+
+func newRefusingCollector(t *testing.T, refuse int) *refusingCollector {
+	t.Helper()
+	c := &refusingCollector{posts: map[string]int{}}
+	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		c.mu.Lock()
+		c.posts[r.URL.Path]++
+		n := c.posts[r.URL.Path]
+		c.mu.Unlock()
+		if refuse < 0 || n <= refuse {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(c.srv.Close)
+	return c
+}
+
+func (c *refusingCollector) count(path string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.posts[path]
+}
+
+// emitAndShutdown records one span and one counter increment and shuts down,
+// returning how long that took.
+func emitAndShutdown(t *testing.T, endpoint string, opts ...Option) time.Duration {
+	t.Helper()
+	ctx := context.Background()
+	tel, err := Init(ctx, Config{Endpoint: endpoint, ServiceName: "svc"},
+		append([]Option{WithMetricInterval(time.Hour)}, opts...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, span := tel.Tracer.Start(ctx, "op")
+	span.End()
+	ctr, _ := tel.Meter.Int64Counter("c")
+	ctr.Add(ctx, 1)
+	start := time.Now()
+	_ = tel.Shutdown(ctx)
+	return time.Since(start)
+}
+
+func TestWithRetry_RetriesATransient503InsideTheTimeout(t *testing.T) {
+	c := newRefusingCollector(t, 1)
+	d := emitAndShutdown(t, c.srv.URL,
+		WithTimeout(2*time.Second), WithRetry(50*time.Millisecond, time.Second))
+	for _, path := range []string{"/v1/traces", "/v1/metrics"} {
+		if got := c.count(path); got < 2 {
+			t.Errorf("%s: %d POST(s), want >= 2 (a retry after the 503)", path, got)
+		}
+	}
+	if d > 2500*time.Millisecond {
+		t.Errorf("shutdown took %v, want within the 2s timeout", d)
+	}
+}
+
+func TestWithoutRetry_ATransient503DropsTheBatch(t *testing.T) {
+	// Documents why WithRetry exists: the default first retry waits 5 s, far
+	// beyond a short timeout, so the one refused POST is the only attempt.
+	c := newRefusingCollector(t, 1)
+	emitAndShutdown(t, c.srv.URL, WithTimeout(500*time.Millisecond))
+	if got := c.count("/v1/traces"); got != 1 {
+		t.Errorf("/v1/traces: %d POST(s), want exactly 1 without WithRetry", got)
+	}
+}
+
+func TestWithRetry_StaysBoundedWhenCollectorAlwaysRefuses(t *testing.T) {
+	c := newRefusingCollector(t, -1)
+	const timeout = 600 * time.Millisecond
+	// maxElapsed far above the timeout is clamped to it.
+	d := emitAndShutdown(t, c.srv.URL, WithTimeout(timeout), WithRetry(20*time.Millisecond, time.Hour))
+	if got := c.count("/v1/traces"); got < 2 {
+		t.Errorf("/v1/traces: %d POST(s), want >= 2 retries", got)
+	}
+	if d > 3*time.Second {
+		t.Errorf("shutdown took %v with an always-refusing collector, want bounded by ~%v", d, timeout)
+	}
+}
+
+func TestWithRetry_NonPositiveArgumentsKeepTheDefaults(t *testing.T) {
+	var o options
+	WithRetry(0, time.Second)(&o)
+	WithRetry(time.Second, 0)(&o)
+	if o.retry {
+		t.Fatal("non-positive WithRetry arguments must not enable retry")
+	}
+}
+
 func TestParseEndpoint(t *testing.T) {
 	cases := []struct {
 		in       string

@@ -11,6 +11,11 @@
 //   - Histograms get explicit second-based bucket boundaries via a View (the
 //     SDK defaults are tuned for milliseconds).
 //   - Only the OTLP/HTTP exporters are used (otlptracehttp, otlpmetrichttp).
+//   - Export retry is opt-in via WithRetry. The OTLP exporters' default retry
+//     waits 5 s before the first retry, which a short flush budget can never
+//     afford, so a single transient collector refusal (HTTP 503) would drop the
+//     whole batch; WithRetry sets a short initial interval and a bounded
+//     elapsed time that fits the caller's flush budget.
 //   - ForceFlush and Shutdown are bounded by a timeout so a down collector can
 //     never hang the host process.
 //   - No resource attribute that is unique per process (e.g. service.instance.id)
@@ -111,6 +116,9 @@ type options struct {
 	timeout        time.Duration
 	buckets        []float64
 	metricInterval time.Duration
+	retry          bool
+	retryInitial   time.Duration
+	retryMaxElapse time.Duration
 }
 
 // Option customizes Init.
@@ -127,6 +135,22 @@ func WithHistogramBuckets(b []float64) Option { return func(o *options) { o.buck
 
 // WithMetricInterval overrides the periodic reader interval.
 func WithMetricInterval(d time.Duration) Option { return func(o *options) { o.metricInterval = d } }
+
+// WithRetry makes both exporters retry a transient failure (HTTP 429, 502,
+// 503, 504, or a network error) with exponential backoff: the first wait is
+// about initial and the total time spent on one request, retries included, is
+// at most maxElapsed. maxElapsed is clamped to the WithTimeout bound, because
+// ForceFlush and Shutdown give up at that bound anyway; pass a value below the
+// caller's flush budget so a retry can still complete inside it. Non-positive
+// arguments leave the exporters' defaults (first retry after 5 s) untouched.
+func WithRetry(initial, maxElapsed time.Duration) Option {
+	return func(o *options) {
+		if initial <= 0 || maxElapsed <= 0 {
+			return
+		}
+		o.retry, o.retryInitial, o.retryMaxElapse = true, initial, maxElapsed
+	}
+}
 
 // Init builds tracing and metrics for cfg. With an empty cfg.Endpoint it
 // returns a no-op Telemetry and nil error without touching the network.
@@ -175,6 +199,17 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (*Telemetry, error) {
 		otlpmetrichttp.WithTimeout(o.timeout),
 		// Delta temporality is a property of the exporter's selector.
 		otlpmetrichttp.WithTemporalitySelector(deltaSelector),
+	}
+	if o.retry {
+		maxElapsed := min(o.retryMaxElapse, o.timeout)
+		// MaxInterval caps the pre-randomization backoff; the elapsed bound is
+		// what limits the total wait.
+		traceOpts = append(traceOpts, otlptracehttp.WithRetry(otlptracehttp.RetryConfig{
+			Enabled: true, InitialInterval: o.retryInitial, MaxInterval: maxElapsed, MaxElapsedTime: maxElapsed,
+		}))
+		metricOpts = append(metricOpts, otlpmetrichttp.WithRetry(otlpmetrichttp.RetryConfig{
+			Enabled: true, InitialInterval: o.retryInitial, MaxInterval: maxElapsed, MaxElapsedTime: maxElapsed,
+		}))
 	}
 	if insecure {
 		traceOpts = append(traceOpts, otlptracehttp.WithInsecure())

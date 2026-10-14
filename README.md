@@ -21,7 +21,7 @@ There are no release tags; pin a commit and bump it like any other dependency.
   under `~/.local/state` or `~/.config`.
 - **`otelsetup`** — OpenTelemetry tracing and metrics setup for short-lived CLI processes
   exporting to a local OTLP/HTTP collector: `Init(ctx, Config{Endpoint, ServiceName, Version})`
-  returns a tracer, meter, and bounded `ForceFlush`/`Shutdown`. It is a no-op (no network) when the
+  returns a tracer, meter, and bounded `ForceFlush`/`Shutdown`. `WithRetry(initial, maxElapsed)` opts the exporters into a short-interval retry that fits the caller's flush budget, so one transient collector 503 does not drop the batch. It is a no-op (no network) when the
   endpoint is empty, uses delta metric temporality and explicit second-based histogram buckets, and
   ships a generated `metrics.json` catalog of metric names and units (`go generate ./otelsetup`).
   Importing it pulls the OTel modules into your `go.mod`; other packages are unaffected.
