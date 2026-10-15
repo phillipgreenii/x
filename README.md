@@ -28,6 +28,15 @@ There are no release tags; pin a commit and bump it like any other dependency.
 - **`gitclient`** — a git CLI client with an allowlisted child environment (only `PATH`, `HOME`,
   `SSH_AUTH_SOCK` are inherited, so an ambient `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` can never
   redirect it). `Client.Run(ctx, args...)` is the escape hatch for any verb.
+- **`pprofserver`** — Go runtime profiling (`net/http/pprof`) for a long-running daemon, served on
+  a listener that is never reachable from the network. It is opt-in: `StartFromEnv` opens nothing
+  unless the environment variable named by the caller (for example `PA_MONITOR_PPROF_ADDR`) is set.
+  The value MUST be an absolute unix-socket path (created mode 0600, replacing a stale socket,
+  never removing a regular file) or a loopback `host:port`; anything else (wildcard, remote,
+  relative) is refused with one stderr line and the daemon keeps running. It uses its own mux
+  holding only the pprof routes (never `http.DefaultServeMux`) and sets no write timeout, so
+  `/debug/pprof/profile?seconds=N` works. `pprofserver/mutation-check.sh` is the recorded mutation
+  check proving the tests catch a loosened host or socket-mode check.
 - **`gitfixture`** / **`gittest`** — hermetic, real git repositories for tests. Tests that need git
   MUST use these rather than hand-rolling `git init` or `exec.Command("git", ...)`. See
   [Git fixtures](#git-fixtures).
