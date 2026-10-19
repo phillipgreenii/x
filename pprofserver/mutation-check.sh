@@ -58,7 +58,7 @@ run_mutant() {
   local name="$1" site="$2" replacement="$3"
   local content mutated_file overlay_file output_file
   content="$(<"$source_file")"
-  if [[ "$content" != *"$site"* ]]; then
+  if [[ $content != *"$site"* ]]; then
     echo "ERROR: mutation site not found for mutant '$name': $site" >&2
     exit 3
   fi
@@ -69,7 +69,7 @@ run_mutant() {
   printf '{"Replace":{"%s":"%s"}}\n' "$source_file" "$mutated_file" >"$overlay_file"
 
   run_suite "$output_file" "$overlay_file"
-  if [[ "$suite_status" -eq 0 ]]; then
+  if [[ $suite_status -eq 0 ]]; then
     echo "SURVIVED: mutant '$name' ($site -> $replacement): tests still pass" >&2
     return 1
   fi
@@ -90,7 +90,7 @@ run_mutant() {
 echo "Baseline: running the unmutated pprofserver suite"
 baseline_output="$work_dir/baseline.out"
 run_suite "$baseline_output"
-if [[ "$suite_status" -ne 0 ]]; then
+if [[ $suite_status -ne 0 ]]; then
   echo "ERROR: baseline run failed (exit $suite_status); no mutants were run" >&2
   cat "$baseline_output" >&2
   exit 2
@@ -105,7 +105,7 @@ run_mutant mode-check-loosened \
   'os.Chmod(path, 0o600)' \
   'os.Chmod(path, 0o666)' || survivors+=(mode-check-loosened)
 
-if [[ "${#survivors[@]}" -gt 0 ]]; then
+if [[ ${#survivors[@]} -gt 0 ]]; then
   echo "FAIL: surviving mutant(s): ${survivors[*]}" >&2
   exit 4
 fi
