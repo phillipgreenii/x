@@ -8,6 +8,7 @@ package gittest
 import (
 	"testing"
 
+	"github.com/phillipgreenii/x/gitclient"
 	"github.com/phillipgreenii/x/gitfixture"
 )
 
@@ -58,4 +59,18 @@ func Clone(t *testing.T, src *gitfixture.Repo, name string) *gitfixture.Repo {
 		t.Fatalf("gittest.Clone(%q): %v", name, err)
 	}
 	return repo
+}
+
+// ClientAt returns a hermetic client for dir under repo's fixture (see
+// gitfixture.Repo.ClientAt): dir MUST resolve inside the fixture root, e.g.
+// a linked worktree created under repo.RootPath. It fails the test
+// immediately on error, like New, NewSibling and Clone.
+func ClientAt(t *testing.T, repo *gitfixture.Repo, dir string) *gitclient.Client {
+	t.Helper()
+
+	c, err := repo.ClientAt(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("gittest.ClientAt(%q): %v", dir, err)
+	}
+	return c
 }

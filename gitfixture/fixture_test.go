@@ -384,3 +384,105 @@ func runGit(t *testing.T, repo *gitfixture.Repo, args ...string) string {
 	}
 	return strings.TrimRight(string(out), "\r\n")
 }
+
+// TestOptionsReturnsAFreshHermeticOptionSet covers Repo.Options: the slice
+// is non-empty, and mutating a returned slice never changes what a later
+// call returns (each call builds its own).
+func TestOptionsReturnsAFreshHermeticOptionSet(t *testing.T) {
+	repo := newTestRepo(t, gitfixture.RepoOptions{})
+
+	first := repo.Options()
+	if len(first) == 0 {
+		t.Fatal("Options() returned an empty slice")
+	}
+	want := len(first)
+	for i := range first {
+		first[i] = nil // overwrite every element
+	}
+	_ = append(first, nil, nil) // and append to it
+
+	second := repo.Options()
+	if len(second) != want {
+		t.Fatalf("len(Options()) after mutating an earlier result = %d, want %d", len(second), want)
+	}
+	for i, o := range second {
+		if o == nil {
+			t.Errorf("Options()[%d] is nil after mutating an earlier result", i)
+		}
+	}
+}
+
+// TestClientAtAnchorsAtALinkedWorktreeUnderTheRoot covers the happy path:
+// a worktree placed under the fixture root yields a working client.
+func TestClientAtAnchorsAtALinkedWorktreeUnderTheRoot(t *testing.T) {
+	repo := newTestRepo(t, gitfixture.RepoOptions{InitialCommit: true})
+	wt, err := repo.RootPath("wt")
+	if err != nil {
+		t.Fatalf("RootPath() error = %v", err)
+	}
+	runGit(t, repo, "worktree", "add", wt, "-b", "wt-branch")
+
+	c, err := repo.ClientAt(t.Context(), wt)
+	if err != nil {
+		t.Fatalf("ClientAt(%s) error = %v", wt, err)
+	}
+	out, err := c.Run(t.Context(), "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse via ClientAt client: %v", err)
+	}
+	if got := strings.TrimRight(string(out), "\n"); got != "wt-branch" {
+		t.Errorf("ClientAt client HEAD = %q, want %q", got, "wt-branch")
+	}
+}
+
+// TestClientAtRejectsDirsOutsideTheFixtureRoot covers the containment
+// check: a separate temp dir, a symlink under the root that points outside
+// it, a relative escape, and a dir that does not exist all fail, and the
+// error names the fixture root.
+func TestClientAtRejectsDirsOutsideTheFixtureRoot(t *testing.T) {
+	repo := newTestRepo(t, gitfixture.RepoOptions{})
+
+	outside := t.TempDir()
+	link := filepath.Join(repo.Root(), "escape-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatalf("Symlink(%s, %s): %v", outside, link, err)
+	}
+	// A sibling directory whose name merely shares the root's string prefix.
+	prefixSibling := repo.Root() + "-sibling"
+	if err := os.MkdirAll(prefixSibling, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", prefixSibling, err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(prefixSibling) })
+
+	cases := map[string]string{
+		"separate temp dir":    outside,
+		"symlink out of root":  link,
+		"relative escape":      filepath.Join(repo.Root(), "..", filepath.Base(outside)),
+		"shared string prefix": prefixSibling,
+		"missing dir":          filepath.Join(repo.Root(), "does-not-exist"),
+	}
+	for name, dir := range cases {
+		t.Run(name, func(t *testing.T) {
+			c, err := repo.ClientAt(t.Context(), dir)
+			if err == nil {
+				t.Fatalf("ClientAt(%s) error = nil (client %v), want a rejection", dir, c)
+			}
+			if !strings.Contains(err.Error(), repo.Root()) {
+				t.Errorf("ClientAt(%s) error = %q, want it to name the fixture root %s", dir, err, repo.Root())
+			}
+		})
+	}
+}
+
+// TestClientAtAcceptsTheRootItselfButNotANonRepo covers the boundary: the
+// root passes containment, and a contained non-repository directory still
+// fails inside gitclient.New (the ceiling stops the walk-up).
+func TestClientAtAcceptsTheRootItselfButNotANonRepo(t *testing.T) {
+	repo := newTestRepo(t, gitfixture.RepoOptions{})
+
+	if _, err := repo.ClientAt(t.Context(), repo.Root()); err == nil {
+		t.Error("ClientAt(root) error = nil, want gitclient.New to reject a non-repository directory")
+	} else if strings.Contains(err.Error(), "outside the fixture root") {
+		t.Errorf("ClientAt(root) error = %q, want the containment check to PASS the root itself", err)
+	}
+}

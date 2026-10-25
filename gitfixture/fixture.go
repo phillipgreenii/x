@@ -297,6 +297,39 @@ func (r *Repo) RootPath(rel string) (string, error) {
 	return containedPath(r.root, rel)
 }
 
+// Options returns a fresh slice holding exactly the hermetic gitclient
+// Options this repository's own Client was built with (design §5 guarantee
+// 5): the fixture HOME, no inherited SSH_AUTH_SOCK, the symlink-resolved
+// fixture root as the discovery ceiling, and no system config. Feed it to
+// an Opener seam, or to gitclient.New / Discover / Clone, inside code under
+// test that opens its own client at another path (a linked worktree, a
+// directory beside the repository) so that client is hermetic too instead
+// of re-deriving the option set by hand. Every call builds a new slice, so
+// appending to or overwriting a returned slice never affects a later call.
+func (r *Repo) Options() []gitclient.Option {
+	return hermeticOptions(r.root)
+}
+
+// ClientAt returns a client anchored at dir under this repository's
+// hermetic option set (gitclient.New(ctx, dir, r.Options()...)). dir MUST
+// resolve, after symlink resolution, to the fixture root or a path inside
+// it: a dir that does not exist, or that resolves outside the root (a
+// separate temp dir, a symlink under the root pointing out of it), is
+// rejected with an error naming the root, keeping the package promise that
+// a fixture cannot be configured to touch a real path. Use it for a linked
+// worktree created under RootPath, or any other directory beside the
+// repository, that Client (anchored at Dir) does not cover.
+func (r *Repo) ClientAt(ctx context.Context, dir string) (*gitclient.Client, error) {
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, fmt.Errorf("gitfixture: resolving %s to check it is inside the fixture root %s: %w", dir, r.root, err)
+	}
+	if resolved != r.root && !strings.HasPrefix(resolved, r.root+string(filepath.Separator)) {
+		return nil, fmt.Errorf("gitfixture: %s (resolves to %s) is outside the fixture root %s", dir, resolved, r.root)
+	}
+	return gitclient.New(ctx, dir, r.Options()...)
+}
+
 // NewSibling creates a further repository named name directly under THIS
 // repository's fixture root, sharing its HOME, hooks directory, ceiling
 // and (unless opts.Suite is set) Suite -- e.g. a workspace holding an

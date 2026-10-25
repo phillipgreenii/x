@@ -154,3 +154,23 @@ func TestCloneRoundTripsThroughABareRemote(t *testing.T) {
 		t.Errorf("clone HEAD subject = %q, want %q", got, "initial commit")
 	}
 }
+
+func TestClientAtReturnsAHermeticClientAtAWorktree(t *testing.T) {
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "clientat", InitialCommit: true})
+	wt, err := repo.RootPath("wt")
+	if err != nil {
+		t.Fatalf("RootPath(wt): %v", err)
+	}
+	if _, err := repo.Client.Run(t.Context(), "worktree", "add", wt, "-b", "clientat-wt"); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
+
+	c := gittest.ClientAt(t, repo, wt)
+	out, err := c.Run(t.Context(), "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse via ClientAt client: %v", err)
+	}
+	if got := strings.TrimRight(string(out), "\n"); got != "clientat-wt" {
+		t.Errorf("ClientAt client HEAD = %q, want %q", got, "clientat-wt")
+	}
+}

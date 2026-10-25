@@ -291,6 +291,87 @@ func TestGuarantee4HooksNeverRun(t *testing.T) {
 	}
 }
 
+// TestGuarantee5ChildEnvIsTheHermeticSet covers design §5 guarantee 5: the
+// fixture's child environment is built ONLY through the hermetic option
+// set -- fixture HOME, no inherited SSH_AUTH_SOCK, the symlink-resolved
+// root as ceiling, GIT_CONFIG_NOSYSTEM=1. With SSH_AUTH_SOCK and a canary
+// variable planted in the test process environment, it dumps the child env
+// of three clients -- repo.Client, gittest.ClientAt at a linked worktree
+// under the fixture root, and gitclient.New fed repo.Options() directly
+// (the Opener-seam shape) -- and requires every dump to be the hermetic
+// set. Deleting WithoutInherited("SSH_AUTH_SOCK") from hermeticOptions makes
+// the SSH_AUTH_SOCK assertion fail.
+func TestGuarantee5ChildEnvIsTheHermeticSet(t *testing.T) {
+	ctx := t.Context()
+	const sock = "/ambient/ssh-agent.sock"
+	t.Setenv("SSH_AUTH_SOCK", sock)
+	t.Setenv("PG2_WC64Y_CANARY", "ambient-canary")
+
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "guarantee5", InitialCommit: true})
+	wt, err := repo.RootPath("wt")
+	if err != nil {
+		t.Fatalf("RootPath(wt): %v", err)
+	}
+	if _, err := repo.Client.Run(ctx, "worktree", "add", wt, "-b", "guarantee5-wt"); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
+
+	// Control: SSH_AUTH_SOCK really is an inherited variable, so its absence
+	// below is the fixture's doing and not a property of the harness.
+	plain, err := gitclient.New(ctx, wt, gitclient.WithHome(filepath.Join(repo.Root(), "home")))
+	if err != nil {
+		t.Fatalf("control New (HOME only): %v", err)
+	}
+	if v, ok := dumpedEnv(t, plain, "SSH_AUTH_SOCK"); !ok || v != sock {
+		t.Fatalf("control: a client without WithoutInherited sees SSH_AUTH_SOCK=%q (present=%v), want %q; the ambient plant is not exercising anything", v, ok, sock)
+	}
+
+	viaOptions, err := gitclient.New(ctx, wt, repo.Options()...)
+	if err != nil {
+		t.Fatalf("gitclient.New(worktree, repo.Options()...): %v", err)
+	}
+	clients := map[string]*gitclient.Client{
+		"repo.Client":                 repo.Client,
+		"gittest.ClientAt(worktree)":  gittest.ClientAt(t, repo, wt),
+		"gitclient.New(repo.Options)": viaOptions,
+	}
+	for name, c := range clients {
+		t.Run(name, func(t *testing.T) {
+			dump := dumpEnv(t, c)
+			for key, want := range map[string]string{
+				"HOME":                    filepath.Join(repo.Root(), "home"),
+				"GIT_CEILING_DIRECTORIES": repo.Root(),
+				"GIT_CONFIG_NOSYSTEM":     "1",
+			} {
+				if got, ok := lookupEnvLine(dump, key); !ok || got != want {
+					t.Errorf("%s = %q (present=%v), want %q", key, got, ok, want)
+				}
+			}
+			for _, key := range []string{"SSH_AUTH_SOCK", "PG2_WC64Y_CANARY"} {
+				if got, ok := lookupEnvLine(dump, key); ok {
+					t.Errorf("child env contains ambient %s=%q, want it absent", key, got)
+				}
+			}
+		})
+	}
+}
+
+// dumpEnv returns the child environment of c's git processes, via the
+// `git -c alias.dumpenv=!env dumpenv` trick the other guarantee tests use.
+func dumpEnv(t *testing.T, c *gitclient.Client) string {
+	t.Helper()
+	out, err := c.Run(t.Context(), "-c", "alias.dumpenv=!env", "dumpenv")
+	if err != nil {
+		t.Fatalf("dumping child env: %v", err)
+	}
+	return string(out)
+}
+
+func dumpedEnv(t *testing.T, c *gitclient.Client, key string) (string, bool) {
+	t.Helper()
+	return lookupEnvLine(dumpEnv(t, c), key)
+}
+
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

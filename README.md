@@ -76,16 +76,18 @@ environment is an allowlist, so a hostile ambient `GIT_DIR`, `GIT_WORK_TREE`, `G
 `GIT_CONFIG_*` cannot reach (or be written into) a real repository. `gitfixture` is the same thing
 without the `testing` import, for non-test helpers.
 
-| Need                                                                                                                | Use                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Any git verb (worktree add/lock, switch -c, merge --ff-only, branch, config, rev-parse, checkout, push, fetch, ...) | `repo.Client.Run(ctx, args...)` — anchored at the repo, hermetic environment. No separate runner exists on purpose.   |
-| Write / commit files                                                                                                | `repo.WriteFile(rel, content)`, `repo.Commit(ctx, msg, files)`                                                        |
-| An initial commit on the initial branch                                                                             | `RepoOptions{InitialCommit: true}` (one empty commit; not valid with `Bare`)                                          |
-| A bare remote                                                                                                       | `repo.AddBareRemote(ctx, "origin")` (also registers it as a remote of `repo`)                                         |
-| Clone a repo or remote into a working repo                                                                          | `repo.Clone(ctx, name)` / `gittest.Clone(t, src, name)`                                                               |
-| Several named repos under one root                                                                                  | `RepoOptions{Name: "alpha"}`, then `repo.NewSibling(ctx, "beta", opts)` / `gittest.NewSibling(t, repo, "beta", opts)` |
-| A git dir outside the work tree                                                                                     | `RepoOptions{SeparateGitDir: "gitdirs/repo.git"}` (relative to the fixture root)                                      |
-| A path beside the repo (worktree target)                                                                            | `repo.Root()`, `repo.RootPath(rel)` — containment-checked against the fixture root                                    |
+| Need                                                                                                                | Use                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Any git verb (worktree add/lock, switch -c, merge --ff-only, branch, config, rev-parse, checkout, push, fetch, ...) | `repo.Client.Run(ctx, args...)` — anchored at the repo, hermetic environment. No separate runner exists on purpose.       |
+| Write / commit files                                                                                                | `repo.WriteFile(rel, content)`, `repo.Commit(ctx, msg, files)`                                                            |
+| An initial commit on the initial branch                                                                             | `RepoOptions{InitialCommit: true}` (one empty commit; not valid with `Bare`)                                              |
+| A bare remote                                                                                                       | `repo.AddBareRemote(ctx, "origin")` (also registers it as a remote of `repo`)                                             |
+| Clone a repo or remote into a working repo                                                                          | `repo.Clone(ctx, name)` / `gittest.Clone(t, src, name)`                                                                   |
+| Several named repos under one root                                                                                  | `RepoOptions{Name: "alpha"}`, then `repo.NewSibling(ctx, "beta", opts)` / `gittest.NewSibling(t, repo, "beta", opts)`     |
+| A git dir outside the work tree                                                                                     | `RepoOptions{SeparateGitDir: "gitdirs/repo.git"}` (relative to the fixture root)                                          |
+| A path beside the repo (worktree target)                                                                            | `repo.Root()`, `repo.RootPath(rel)` — containment-checked against the fixture root                                        |
+| A hermetic client at another path (a linked worktree, a dir beside the repo)                                        | `repo.ClientAt(ctx, dir)` / `gittest.ClientAt(t, repo, dir)` — `dir` must resolve inside the fixture root, else it errors |
+| The hermetic option set, for an Opener seam or `gitclient.New` / `Discover` / `Clone` in code under test            | `repo.Options()` — a fresh `[]gitclient.Option` each call; never hand-roll the set                                        |
 
 Notes:
 
