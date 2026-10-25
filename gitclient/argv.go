@@ -13,7 +13,8 @@ import (
 //
 // Parsed is true only for the commands the environment contract (design
 // §4.4) names: status, log, diff, rev-parse, rev-list,
-// `branch --show-current`, ls-files, config --get. It is false for every
+// `branch --show-current`, for-each-ref (ListBranches), ls-files,
+// config --get. It is false for every
 // hook-running mutation (worktree add/remove/prune, branch -d/-D, fetch,
 // reset --hard, clean -fd) -- LC_ALL=C MUST NOT leak into a child that
 // might run hooks or into the Run escape hatch.
@@ -309,10 +310,17 @@ func addRemoteArgs(name, url string) verbArgs {
 
 // --- BranchLister ---
 
-// listBranchesArgs builds `branch --format=%(refname:short)`
+// listBranchesArgs builds
+// `for-each-ref --sort=refname --format=%(refname:lstrip=2) refs/heads/`
 // (BranchLister.ListBranches) -- the concrete production call site
 // behind pn's own workspace/status.go localBranches gap (design doc
-// pg2-migib §2).
+// pg2-migib §2). for-each-ref is used instead of `branch` because it
+// never lists the detached-HEAD pseudo-entry, the explicit --sort makes
+// the order alphabetical regardless of the ambient branch.sort config,
+// and lstrip=2 never yields `heads/<name>` when a tag shadows a branch
+// name (refname:short would).
 func listBranchesArgs() verbArgs {
-	return verbArgs{Args: []string{"branch", "--format=%(refname:short)"}, Parsed: true}
+	return verbArgs{Args: []string{
+		"for-each-ref", "--sort=refname", "--format=%(refname:lstrip=2)", "refs/heads/",
+	}, Parsed: true}
 }

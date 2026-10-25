@@ -14,6 +14,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/phillipgreenii/x/gitclient"
@@ -47,6 +49,45 @@ func TestListBranchesReturnsAllLocalBranches(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("ListBranches()[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestListBranchesIgnoresDetachedHEADBranchSortAndShadowingTag pins the
+// three defects of pg2-cahf0: the detached-HEAD pseudo-entry is not a
+// branch, the ambient branch.sort config (here reverse name order, so a
+// config-following listing is provably not alphabetical) does not
+// reorder the list, and a tag shadowing a branch name does not turn the
+// entry into heads/<name>.
+func TestListBranchesIgnoresDetachedHEADBranchSortAndShadowingTag(t *testing.T) {
+	ctx := t.Context()
+	repo := gittest.New(t, gitfixture.RepoOptions{Suite: "list-branches-hostile"})
+	if _, err := repo.Commit(ctx, "seed", map[string]string{"a.txt": "hello\n"}); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	for _, args := range [][]string{
+		{"branch", "another"},
+		{"branch", "feature"},
+		{"config", "branch.sort", "-refname"},
+		{"tag", "feature"},
+		{"checkout", "--detach"},
+	} {
+		if _, err := repo.Client.Run(ctx, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	got, err := repo.Client.ListBranches(ctx)
+	if err != nil {
+		t.Fatalf("ListBranches() error = %v", err)
+	}
+	want := []string{"another", "feature", "main"}
+	if !slices.Equal(got, want) {
+		t.Errorf("ListBranches() = %v, want %v", got, want)
+	}
+	for _, name := range got {
+		if strings.HasPrefix(name, "(") || strings.HasPrefix(name, "heads/") {
+			t.Errorf("ListBranches() entry %q is a pseudo-entry or an ambiguity-qualified name", name)
 		}
 	}
 }

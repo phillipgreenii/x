@@ -304,7 +304,7 @@ func TestAddRemoteArgs(t *testing.T) {
 
 func TestListBranchesArgs(t *testing.T) {
 	v := listBranchesArgs()
-	want := []string{"branch", "--format=%(refname:short)"}
+	want := []string{"for-each-ref", "--sort=refname", "--format=%(refname:lstrip=2)", "refs/heads/"}
 	if !reflect.DeepEqual(v.Args, want) {
 		t.Errorf("listBranchesArgs().Args = %v, want %v", v.Args, want)
 	}
@@ -335,7 +335,7 @@ func TestLCAllScopingInEnvConstruction(t *testing.T) {
 		"branch --show-current (Locator.CurrentBranch)":  currentBranchArgs(),
 		"ls-files (StatusReader.IsTracked)":              isTrackedArgs("some/path"),
 		"config --get (Locator.RemoteURL)":               remoteURLArgs("origin"),
-		"branch --format (BranchLister.ListBranches)":    listBranchesArgs(),
+		"for-each-ref (BranchLister.ListBranches)":       listBranchesArgs(),
 	}
 	for name, v := range parsed {
 		if !v.Parsed {

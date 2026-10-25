@@ -229,8 +229,10 @@ func (c *Client) ChangedFiles(ctx context.Context, base string) ([]FileChange, e
 
 // --- BranchLister ---
 
-// ListBranches runs `branch --format=%(refname:short)` (listBranchesArgs)
-// and returns one entry per local branch (parseBranchList). An empty
+// ListBranches runs `for-each-ref --sort=refname
+// --format=%(refname:lstrip=2) refs/heads/` (listBranchesArgs) and
+// returns one entry per local branch in alphabetical order, never the
+// detached-HEAD pseudo-entry (parseBranchList). An empty
 // repository with no branches yet (unborn HEAD) returns an empty slice,
 // not an error.
 func (c *Client) ListBranches(ctx context.Context) ([]string, error) {

@@ -135,11 +135,11 @@ type Pusher interface {
 
 // BranchLister enumerates local branches -- the read-side role behind
 // pn's own workspace/status.go localBranches gap (design doc pg2-migib
-// §2: no BranchManager method covers `branch --format=...` today). No
+// §2: no BranchManager method covers listing branches today). No
 // streaming concept applies; it is a single parsed read, exactly like
 // Locator/RefReader/StatusReader.
 type BranchLister interface {
-	ListBranches(ctx context.Context) ([]string, error) // branch --format=%(refname:short)
+	ListBranches(ctx context.Context) ([]string, error) // for-each-ref --sort=refname --format=%(refname:lstrip=2) refs/heads/
 }
 
 // RemoteManager configures a repository's remotes. AddRemote is Clone's

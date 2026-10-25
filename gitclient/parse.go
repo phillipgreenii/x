@@ -259,7 +259,7 @@ func parseCount(data []byte) (int, error) {
 	return n, nil
 }
 
-// parseBranchList parses `git branch --format=%(refname:short)` output
+// parseBranchList parses `git for-each-ref --format=%(refname:lstrip=2) refs/heads/` output
 // (listBranchesArgs / BranchLister.ListBranches): one branch name per
 // line. Empty input (no branches at all -- an unborn HEAD) returns a nil
 // slice rather than a slice containing one empty string.
