@@ -32,7 +32,16 @@ func TestExtendedFixtureSurfaceIsImmuneToHostileAmbientGitEnvironment(t *testing
 	if err != nil {
 		t.Fatalf("Init(decoy) error = %v", err)
 	}
-	for _, kv := range [][2]string{{"user.name", "decoy"}, {"user.email", "decoy@example.invalid"}} {
+	// The decoy is hand-built with gitclient.Init (not a gitfixture), so it
+	// does not get the fixture's empty core.hooksPath. Without it the host's
+	// global commit hook (pg-git-check-identity) runs and refuses the
+	// placeholder identity -- by design, gitfixture.invalid included, so a
+	// fixture identity that escapes is caught.
+	decoyHooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(decoyHooks, 0o755); err != nil {
+		t.Fatalf("creating empty decoy hooks dir: %v", err)
+	}
+	for _, kv := range [][2]string{{"user.name", "decoy"}, {"user.email", "decoy@gitfixture.invalid"}, {"core.hooksPath", decoyHooks}} {
 		if _, err := decoy.Run(ctx, "config", kv[0], kv[1]); err != nil {
 			t.Fatalf("configuring decoy %s: %v", kv[0], err)
 		}

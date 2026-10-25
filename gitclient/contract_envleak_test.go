@@ -45,8 +45,20 @@ func TestMutatingVerbsAreImmuneToAmbientGitDirFamilyAndConfigInjection(t *testin
 	if _, err := decoy.Run(ctx, "config", "user.name", "decoy"); err != nil {
 		t.Fatalf("configuring decoy user.name: %v", err)
 	}
-	if _, err := decoy.Run(ctx, "config", "user.email", "decoy@example.invalid"); err != nil {
+	if _, err := decoy.Run(ctx, "config", "user.email", "decoy@gitfixture.invalid"); err != nil {
 		t.Fatalf("configuring decoy user.email: %v", err)
+	}
+	// The decoy is hand-built with gitclient.Init (not a gitfixture), so it
+	// does not get the fixture's empty core.hooksPath. Without this, the
+	// host's global commit hook (pg-git-check-identity) runs and refuses the
+	// placeholder identity -- which it refuses by design, gitfixture.invalid
+	// included, so a fixture identity that escapes is caught.
+	decoyHooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(decoyHooks, 0o755); err != nil {
+		t.Fatalf("creating empty decoy hooks dir: %v", err)
+	}
+	if _, err := decoy.Run(ctx, "config", "core.hooksPath", decoyHooks); err != nil {
+		t.Fatalf("configuring decoy core.hooksPath: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(decoyDir, "decoy.txt"), []byte("decoy content\n"), 0o644); err != nil {
 		t.Fatalf("writing decoy.txt: %v", err)
