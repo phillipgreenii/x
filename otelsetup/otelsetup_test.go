@@ -262,18 +262,28 @@ type refusingCollector struct {
 	srv   *httptest.Server
 	mu    sync.Mutex
 	posts map[string]int
+	// only, when non-empty, restricts the refusal to that request path; every
+	// other path is always answered 200.
+	only string
 }
 
 func newRefusingCollector(t *testing.T, refuse int) *refusingCollector {
 	t.Helper()
-	c := &refusingCollector{posts: map[string]int{}}
+	return newRefusingCollectorFor(t, refuse, "")
+}
+
+// newRefusingCollectorFor is newRefusingCollector with the refusal limited to
+// the one path `only` (empty means both signals).
+func newRefusingCollectorFor(t *testing.T, refuse int, only string) *refusingCollector {
+	t.Helper()
+	c := &refusingCollector{posts: map[string]int{}, only: only}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		c.mu.Lock()
 		c.posts[r.URL.Path]++
 		n := c.posts[r.URL.Path]
 		c.mu.Unlock()
-		if refuse < 0 || n <= refuse {
+		if (c.only == "" || r.URL.Path == c.only) && (refuse < 0 || n <= refuse) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -343,6 +353,71 @@ func TestWithRetry_StaysBoundedWhenCollectorAlwaysRefuses(t *testing.T) {
 	}
 	if d > 3*time.Second {
 		t.Errorf("shutdown took %v with an always-refusing collector, want bounded by ~%v", d, timeout)
+	}
+}
+
+// emitAndFinish records one span and one counter increment, then runs finish
+// (ForceFlush or Shutdown) and returns how long finish took. The metric
+// interval stays at its 60 s default so no periodic export can satisfy an
+// assertion by accident.
+func emitAndFinish(t *testing.T, endpoint string, finish func(*Telemetry, context.Context) error, opts ...Option) time.Duration {
+	t.Helper()
+	ctx := context.Background()
+	tel, err := Init(ctx, Config{Endpoint: endpoint, ServiceName: "svc"}, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, span := tel.Tracer.Start(ctx, "op")
+	span.End()
+	ctr, _ := tel.Meter.Int64Counter("c")
+	ctr.Add(ctx, 1)
+	start := time.Now()
+	_ = finish(tel, ctx)
+	d := time.Since(start)
+	// Release the provider goroutines when the test only flushed.
+	_ = tel.Shutdown(ctx)
+	return d
+}
+
+func TestShutdown_MetricsExportedWhileTracesAreRefused(t *testing.T) {
+	// The always-refused trace export retries for the whole timeout; with the
+	// providers shut down one after the other, the metric export would start
+	// on an already-expired context and send nothing.
+	c := newRefusingCollectorFor(t, -1, "/v1/traces")
+	d := emitAndFinish(t, c.srv.URL,
+		func(tel *Telemetry, ctx context.Context) error { return tel.Shutdown(ctx) },
+		WithTimeout(600*time.Millisecond), WithRetry(20*time.Millisecond, time.Hour))
+	if got := c.count("/v1/metrics"); got < 1 {
+		t.Errorf("/v1/metrics: %d POST(s), want >= 1 while /v1/traces is refused", got)
+	}
+	if got := c.count("/v1/traces"); got < 1 {
+		t.Errorf("/v1/traces: %d POST(s), want >= 1", got)
+	}
+	if d > 3*time.Second {
+		t.Errorf("shutdown took %v, want bounded by ~600ms", d)
+	}
+}
+
+func TestForceFlush_MetricsExportedWhileTracesAreRefused(t *testing.T) {
+	c := newRefusingCollectorFor(t, -1, "/v1/traces")
+	var flushed time.Duration
+	// Count right after ForceFlush: the helper's cleanup Shutdown that follows
+	// would export the metrics under a fresh deadline and mask the bug.
+	var metricPosts int
+	_ = emitAndFinish(t, c.srv.URL,
+		func(tel *Telemetry, ctx context.Context) error {
+			start := time.Now()
+			err := tel.ForceFlush(ctx)
+			flushed = time.Since(start)
+			metricPosts = c.count("/v1/metrics")
+			return err
+		},
+		WithTimeout(600*time.Millisecond), WithRetry(20*time.Millisecond, time.Hour))
+	if metricPosts < 1 {
+		t.Errorf("/v1/metrics: %d POST(s) after ForceFlush, want >= 1 while /v1/traces is refused", metricPosts)
+	}
+	if flushed > 3*time.Second {
+		t.Errorf("force flush took %v, want bounded by ~600ms", flushed)
 	}
 }
 

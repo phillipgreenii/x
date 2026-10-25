@@ -254,12 +254,34 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (*Telemetry, error) {
 		Meter:   mp.Meter(cfg.ServiceName),
 		timeout: o.timeout,
 		forceFlush: func(ctx context.Context) error {
-			return errors.Join(tp.ForceFlush(ctx), mp.ForceFlush(ctx))
+			return joinConcurrently(
+				func() error { return tp.ForceFlush(ctx) },
+				func() error { return mp.ForceFlush(ctx) },
+			)
 		},
 		shutdown: func(ctx context.Context) error {
-			return errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx))
+			return joinConcurrently(
+				func() error { return tp.Shutdown(ctx) },
+				func() error { return mp.Shutdown(ctx) },
+			)
 		},
 	}, nil
+}
+
+// joinConcurrently runs the trace and metric provider calls at the same time
+// under the caller's one deadline, waits for both, and joins their errors.
+// Running them one after the other would let a refused or stalled trace export
+// use up the whole budget and leave the metric export an expired context.
+func joinConcurrently(traces, metrics func() error) error {
+	var traceErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		traceErr = traces()
+	}()
+	metricErr := metrics()
+	<-done
+	return errors.Join(traceErr, metricErr)
 }
 
 // deltaSelector reports delta temporality for every instrument kind.
