@@ -67,16 +67,24 @@ func commitsAheadArgs(base, tip string) verbArgs {
 
 // --- StatusReader ---
 
-// statusArgs builds `-c core.fsmonitor=false status --porcelain=v1 -z`
-// (StatusReader.Status). The `-c core.fsmonitor=false` is unconditional
+// statusArgs builds `-c core.fsmonitor=false status --porcelain=v1 -z
+// --untracked-files=normal` (StatusReader.Status). The `-c core.fsmonitor=false` is unconditional
 // and hardcoded here -- not a WithConfig-style per-call override, not a
 // per-instance construction knob -- per bead pg2-f1cq7's own resolved-
 // without-new-mechanism directive: every Status call, for every
 // consumer, always disables fsmonitor, so a wedged `git
 // fsmonitor--daemon` can never cause this call to hang or return stale
 // results.
+//
+// --untracked-files=normal pins the untracked mode (bead pg2-jnue9): git
+// status follows status.showUntrackedFiles, so with =no an unpinned call
+// reports a worktree holding only untracked files as clean, and a consumer
+// that force-removes "clean" worktrees would destroy that work. normal is
+// git's built-in default (an untracked directory is one "dir/" entry), so
+// a repo without the config sees no change; =no and =all configs no longer
+// change the answer.
 func statusArgs() verbArgs {
-	return verbArgs{Args: []string{"-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z"}, Parsed: true}
+	return verbArgs{Args: []string{"-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--untracked-files=normal"}, Parsed: true}
 }
 
 // isTrackedArgs builds `ls-files --error-unmatch <path>`

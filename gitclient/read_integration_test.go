@@ -15,6 +15,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/phillipgreenii/x/gitclient"
@@ -917,5 +918,55 @@ func TestReadMethodsPropagateAnAlreadyCanceledContext(t *testing.T) {
 		if err := c.call(); !errors.Is(err, context.Canceled) {
 			t.Errorf("%s(canceled context) error = %v, want errors.Is(_, context.Canceled)", c.name, err)
 		}
+	}
+}
+
+// TestStatusIgnoresAmbientShowUntrackedFilesConfig is the regression for
+// bead pg2-jnue9: `git status --porcelain` follows the
+// status.showUntrackedFiles config, so without a pinned -u mode a repo
+// (or the operator's global config) setting it to "no" made Status report
+// a worktree holding only untracked files as clean -- and consumers that
+// act on "empty means clean" then force-removed it. statusArgs pins
+// --untracked-files=normal, so the answer is the same for every config
+// value: an untracked file as one entry and an untracked directory
+// collapsed to one "dir/" entry.
+func TestStatusIgnoresAmbientShowUntrackedFilesConfig(t *testing.T) {
+	want := []gitclient.StatusEntry{
+		{Staged: gitclient.StatusUntracked, Unstaged: gitclient.StatusUntracked, Path: "newdir/"},
+		{Staged: gitclient.StatusUntracked, Unstaged: gitclient.StatusUntracked, Path: "untracked.txt"},
+	}
+
+	// "" is the baseline: no status.showUntrackedFiles config at all.
+	for _, mode := range []string{"", "no", "all", "normal"} {
+		name := mode
+		if name == "" {
+			name = "unset"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			repo := gittest.New(t, gitfixture.RepoOptions{Suite: "status-untracked-" + name})
+			if _, err := repo.Commit(ctx, "seed", map[string]string{"a.txt": "hello\n"}); err != nil {
+				t.Fatalf("Commit() error = %v", err)
+			}
+			if err := repo.WriteFile("untracked.txt", "new\n"); err != nil {
+				t.Fatalf("WriteFile(untracked.txt): %v", err)
+			}
+			if err := repo.WriteFile("newdir/inner.txt", "new\n"); err != nil {
+				t.Fatalf("WriteFile(newdir/inner.txt): %v", err)
+			}
+			if mode != "" {
+				if _, err := repo.Client.Run(ctx, "config", "--local", "status.showUntrackedFiles", mode); err != nil {
+					t.Fatalf("setting status.showUntrackedFiles=%s: %v", mode, err)
+				}
+			}
+
+			entries, err := repo.Client.Status(ctx)
+			if err != nil {
+				t.Fatalf("Status() error = %v", err)
+			}
+			if !reflect.DeepEqual(entries, want) {
+				t.Errorf("Status() with status.showUntrackedFiles=%q = %#v, want %#v", mode, entries, want)
+			}
+		})
 	}
 }

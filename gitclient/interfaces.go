@@ -35,7 +35,7 @@ type RefReader interface {
 
 // StatusReader reports working-tree and index state.
 type StatusReader interface {
-	Status(ctx context.Context) ([]StatusEntry, error)        // status --porcelain=v1 -z; clean iff empty
+	Status(ctx context.Context) ([]StatusEntry, error)        // status --porcelain=v1 -z --untracked-files=normal (pinned, ignores status.showUntrackedFiles); clean iff empty
 	IsTracked(ctx context.Context, path string) (bool, error) // ls-files --error-unmatch <path>
 }
 
