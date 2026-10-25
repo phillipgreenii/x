@@ -51,12 +51,25 @@ func New(app string) (*slog.Logger, error) {
 // lowercase level names and UTC time values. New wires it in for the file logger;
 // it is exported so a caller building its own handler over another writer gets
 // the same contract.
-func ReplaceAttr(_ []string, a slog.Attr) slog.Attr {
+//
+// slog calls ReplaceAttr for every non-group attribute, user attributes
+// included, so only the built-in attributes are rewritten: a top-level
+// (empty groups) level holding a slog.Level, and a top-level time of kind
+// slog.KindTime. Any other attribute, including a user attribute that merely
+// happens to be keyed "level" or "time", passes through unchanged.
+func ReplaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) != 0 {
+		return a
+	}
 	switch a.Key {
 	case slog.LevelKey:
-		a.Value = slog.StringValue(strings.ToLower(a.Value.Any().(slog.Level).String()))
+		if lvl, ok := a.Value.Any().(slog.Level); ok {
+			a.Value = slog.StringValue(strings.ToLower(lvl.String()))
+		}
 	case slog.TimeKey:
-		a.Value = slog.TimeValue(a.Value.Time().UTC())
+		if a.Value.Kind() == slog.KindTime {
+			a.Value = slog.TimeValue(a.Value.Time().UTC())
+		}
 	}
 	return a
 }

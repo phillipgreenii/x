@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -227,6 +228,36 @@ func TestReplaceAttrNormalizesLevelAndTime(t *testing.T) {
 		t.Fatalf("decode JSONL line: %v (raw: %s)", err, buf.String())
 	}
 	assertNormalizedFields(t, decoded)
+}
+
+// TestReplaceAttrLeavesUserLevelAndTimeAttrsAlone pins that ReplaceAttr is
+// called by slog for user attributes too, and only rewrites the built-in
+// level and time: a user attribute keyed "level" or "time", at the top level
+// or inside a group, must pass through untouched instead of panicking. It
+// asserts on the raw line because slog emits duplicate keys, so decoding into
+// a map would hide one of them.
+func TestReplaceAttrLeavesUserLevelAndTimeAttrsAlone(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{ReplaceAttr: ReplaceAttr}))
+
+	log.Info("m", "level", "high", "time", "5s", slog.Group("g", "level", 3, "time", "x"))
+
+	line := strings.TrimRight(buf.String(), "\n")
+	m := regexp.MustCompile(`^\{"time":"([^"]+)","level":"info","msg":"m",`).FindStringSubmatch(line)
+	if m == nil {
+		t.Fatalf("raw line %q does not start with the built-in time, lowercase level and msg", line)
+	}
+	if _, err := time.Parse(time.RFC3339, m[1]); err != nil {
+		t.Fatalf("built-in time %q did not parse as RFC3339: %v", m[1], err)
+	}
+	if !strings.HasSuffix(m[1], "Z") && !strings.HasSuffix(m[1], "+00:00") {
+		t.Fatalf("built-in time %q is not UTC (want suffix Z or +00:00)", m[1])
+	}
+	for _, want := range []string{`"level":"high"`, `"time":"5s"`, `"g":{"level":3,"time":"x"}`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("raw line %q is missing user attribute %s", line, want)
+		}
+	}
 }
 
 // assertNormalizedFields checks the level/time normalization New's handler applies.
