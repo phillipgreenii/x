@@ -9,7 +9,8 @@
 //     View) so each process exports only its own increments; a collector-side
 //     deltatocumulative processor accumulates across processes.
 //   - Histograms get explicit second-based bucket boundaries via a View (the
-//     SDK defaults are tuned for milliseconds).
+//     SDK defaults are tuned for milliseconds). A histogram whose catalog entry
+//     (Metrics) declares Buckets gets those instead.
 //   - Only the OTLP/HTTP exporters are used (otlptracehttp, otlpmetrichttp).
 //   - Export retry is opt-in via WithRetry. The OTLP exporters' default retry
 //     waits 5 s before the first retry, which a short flush budget can never
@@ -241,12 +242,7 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (*Telemetry, error) {
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(reader),
-		sdkmetric.WithView(sdkmetric.NewView(
-			sdkmetric.Instrument{Kind: sdkmetric.InstrumentKindHistogram},
-			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
-				Boundaries: o.buckets,
-			}},
-		)),
+		sdkmetric.WithView(histogramBucketsView(o.buckets)),
 	)
 
 	return &Telemetry{
@@ -266,6 +262,27 @@ func Init(ctx context.Context, cfg Config, opts ...Option) (*Telemetry, error) {
 			)
 		},
 	}, nil
+}
+
+// histogramBucketsView gives every histogram the default boundaries, except a
+// histogram whose catalog entry (Metrics) declares its own Buckets, which gets
+// those. One view with a per-instrument choice (rather than a default view plus
+// per-metric views) because every matching view creates its own stream, which
+// would export a histogram twice.
+func histogramBucketsView(defaults []float64) sdkmetric.View {
+	return func(i sdkmetric.Instrument) (sdkmetric.Stream, bool) {
+		if i.Kind != sdkmetric.InstrumentKindHistogram {
+			return sdkmetric.Stream{}, false
+		}
+		b := defaults
+		if own, ok := catalogBuckets(i.Name); ok {
+			b = own
+		}
+		return sdkmetric.NewView(
+			sdkmetric.Instrument{Kind: sdkmetric.InstrumentKindHistogram, Name: i.Name},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{Boundaries: b}},
+		)(i)
+	}
 }
 
 // joinConcurrently runs the trace and metric provider calls at the same time

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -187,6 +188,61 @@ func TestHistogram_ExplicitBuckets(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("bounds = %v, want %v", got, want)
 		}
+	}
+}
+
+// boundsOf returns the explicit bounds the collector received for histogram name.
+func boundsOf(c *collector, name string) []float64 {
+	_, _, reqs := c.snapshot()
+	var got []float64
+	for _, r := range reqs {
+		for _, rm := range r.ResourceMetrics {
+			for _, sm := range rm.ScopeMetrics {
+				for _, m := range sm.Metrics {
+					if m.Name == name {
+						got = m.GetHistogram().DataPoints[0].ExplicitBounds
+					}
+				}
+			}
+		}
+	}
+	return got
+}
+
+// A catalog entry with Buckets overrides the seconds default for that one
+// histogram, and the other histograms keep the default (bead pg2-sdbhh4.10).
+func TestHistogram_CatalogBucketsOverrideDefault(t *testing.T) {
+	c := newCollector(t)
+	ctx := context.Background()
+	tel, err := Init(ctx, Config{Endpoint: c.srv.URL, ServiceName: "svc"}, WithMetricInterval(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, _ := tel.Meter.Int64Histogram("pn.plan.builds")
+	plan.Record(ctx, 400)
+	dur, _ := tel.Meter.Float64Histogram("pn.command.duration")
+	dur.Record(ctx, 1.5)
+	if err := tel.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := boundsOf(c, "pn.plan.builds"); !slices.Equal(got, PlanBuildsBuckets) {
+		t.Fatalf("pn.plan.builds bounds = %v, want %v", got, PlanBuildsBuckets)
+	}
+	if got := boundsOf(c, "pn.command.duration"); !slices.Equal(got, DefaultHistogramBuckets) {
+		t.Fatalf("pn.command.duration bounds = %v, want default %v", got, DefaultHistogramBuckets)
+	}
+}
+
+func TestPlanBuildsCatalogEntry(t *testing.T) {
+	if !slices.Contains(PlanBuildsBuckets, 400) {
+		t.Fatalf("400 must be an exact bucket edge: %v", PlanBuildsBuckets)
+	}
+	b, ok := catalogBuckets("pn.plan.builds")
+	if !ok || !slices.Equal(b, PlanBuildsBuckets) {
+		t.Fatalf("catalogBuckets = %v, %v", b, ok)
+	}
+	if _, ok := catalogBuckets("pn.command.duration"); ok {
+		t.Fatal("pn.command.duration must keep the default buckets")
 	}
 }
 
