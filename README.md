@@ -37,6 +37,20 @@ There are no release tags; pin a commit and bump it like any other dependency.
   holding only the pprof routes (never `http.DefaultServeMux`) and sets no write timeout, so
   `/debug/pprof/profile?seconds=N` works. `pprofserver/mutation-check.sh` is the recorded mutation
   check proving the tests catch a loosened host or socket-mode check.
+- **`cmdrun`** / **`cmdruntest`** — a shared in-process command-runner seam. `cmdrun` is the
+  standard-library-only process-spawn core: `Call` (name, args, dir, stdin, env in `EnvAppend` or
+  `EnvExact` mode, opt-in `OwnProcGroup`), `Result` (stdout and stderr captured separately, `Code`,
+  `Signal`, `CtxErr` when the context ended the child, `StartErr` when it never started) and
+  `Runner`, with `Exec` as the real implementation. Code that runs an external tool MUST take a
+  `cmdrun.Runner` (defaulting to `cmdrun.Exec`) so its tests can answer in process. `cmdruntest`
+  is the `testing` adapter: `cmdruntest.New(t)` returns a `Fake` whose `Runner()` answers from
+  ordered rules (`On(...).Return/Respond/Seq`, limited with `Times`/`Nth`, first match wins),
+  records every call in order (`Calls()`, safe for concurrent use) and fails the test on a call no
+  rule answers. A test that stands in for an external tool MUST use the fake rather than
+  re-executing the test binary (`GO_WANT_HELPER_PROCESS`): a race-built child costs about a second
+  per call, a real `sh` about 9 ms. `cmdruntest.RunContract(t, runner)` is the contract suite
+  against real `sh`; an adapter that wraps `Exec` MUST run it from an `integration`-tagged test.
+  Design and scope: [`docs/adr/0001-shared-command-runner-seam.md`](docs/adr/0001-shared-command-runner-seam.md).
 - **`gitfixture`** / **`gittest`** — hermetic, real git repositories for tests. Tests that need git
   MUST use these rather than hand-rolling `git init` or `exec.Command("git", ...)`. See
   [Git fixtures](#git-fixtures).
@@ -49,7 +63,7 @@ go test -race ./...
 go test -race -tags integration,contract ./...
 ```
 
-- Untagged tests are unit tests: no real git binary, no subprocess.
+- Untagged tests are unit tests: no real git binary, no subprocess (the `cmdruntest` fake is how a test stands in for an external command).
 - `integration` tests exercise the packages' role interfaces against a real git binary, always
   through the `gitfixture`/`gittest` isolated-repo fixture (never a real repository).
 - `contract` tests are the acceptance suite that proves the hermeticity guarantees themselves —
