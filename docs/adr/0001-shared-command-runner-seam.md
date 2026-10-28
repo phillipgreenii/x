@@ -12,7 +12,8 @@ in-process fake with an ordered call log, plus a shared contract suite for the r
 Migrate only the packages whose tests stand in for an external tool by re-executing the test
 binary, in order of measured gain. Do **not** sweep the interface-style `Runner` types that already
 have in-process fakes, and do **not** try to remove the re-exec tests whose subject is a real
-process (`pg-rescue`, `claude-hook-router`, `scriptout`).
+process (`pg-rescue` and `scriptout/conformance`; `claude-hook-router` and `scriptout/exec_test.go`
+do not re-execute, see the class B correction in decision 1).
 
 ## Context
 
@@ -172,6 +173,27 @@ test body):
   tests the Tier-2 backend exec path itself. A `Runner` double cannot replace these; they exercise
   the real `exec`. They are multi-process tests, so under V-4 they belong behind a build tag with
   their own check, not in the unit gate (a follow-up, not part of this decision).
+
+  **Correction (bead `pg2-rwfuej`, from ADR 0111 in `nix-agent-support`, read against the code at
+  `aa01f65ca`, 2026-10-28):** the class B list above overstates what re-executes the test binary.
+  - `claude-hook-router` does NOT re-execute the test binary (no `GO_WANT_*`, no `TestHelperProcess`,
+    no `os.Args[0]`; its delegates are `sh -c` one-liners). It is a V-3 single-process real-tool
+    suite and stays a unit test.
+  - `pg-connector/pkg/scriptout/exec_test.go` does NOT re-execute anything: an in-process backend
+    double replaced the re-exec, and the literal `GO_WANT_HELPER_PROCESS` there is only a comment.
+    The re-exec that remains under `scriptout` is in the `conformance` sub-package
+    (`conformance_test.go`, two tests, env name `GO_WANT_CONFORMANCE_HELPER_PROCESS`, helper
+    `TestHelperProcess`, binary `os.Args[0]`).
+  - `pg-rescue` re-executes only in five test files of its `cmd/*` mains
+    (`cmd/pg-rescue/main_test.go`, `cmd/pg-rescue/flakelock_handler_test.go`,
+    `cmd/pg-rescue-bead/main_test.go`, `cmd/pg-rescue-claude/main_test.go`,
+    `cmd/pg-rescue-notify/main_test.go`, all `GO_WANT_HELPER_PROCESS`). `pg-rescue/internal/runner`
+    no longer does: its `TestMain` builds the fake command once WITHOUT the race detector
+    (`testenv.BuildHelper`, bead `pg2-cp2dfo`) and starts it as an ordinary child process.
+
+  The class B list, meaning the suites that re-execute the test binary, is therefore `pg-rescue`
+  (the `cmd/*` files, not `internal/runner`) and `pg-connector/pkg/scriptout/conformance`, six
+  files in all, not 14. The 14-file count above is the 2026-10-27 snapshot and is kept as history.
 
 ### 2. What the shared shape must cover
 
@@ -345,9 +367,12 @@ module and the bead's own premise is that `x` is the workspace-wide module.
   cannot be a gate yet. After, a check that flags `GO_WANT_HELPER_PROCESS` in any file lacking an
   `integration` (or equivalent) build tag is a one-line `rg` and costs nothing to run. It SHOULD
   be a hook, not a per-module test: `pg-connector/cmd/pg-connector/unit_tier_guard_test.go`
-  already walks the AST per module, and it currently ALLOWS "the re-exec-the-test-binary
-  helper-process pattern (os.Args[0])" in the unit tier, which is the opposite of this rule, so
-  the migration of that module MUST change the allowance in the same commit.
+  already walks the AST per module, and at the time of this spike it ALLOWED "the
+  re-exec-the-test-binary helper-process pattern (os.Args[0])" in the unit tier, which is the
+  opposite of this rule, so the change adding the check MUST flip the allowance in the same commit
+  (appendix bead 9; since done in `nix-agent-support`, commit `6435e88ea`). The hook MUST match
+  every `GO_WANT_*HELPER_PROCESS` name, because `scriptout/conformance` uses
+  `GO_WANT_CONFORMANCE_HELPER_PROCESS`, not `GO_WANT_HELPER_PROCESS`.
 - **Why not a lint now:** a guard before the package exists forbids the only available pattern.
 
 ## Consequences
@@ -362,9 +387,13 @@ Negative: a pin bump and an operator push per migrating module; a second shape f
 interface-style runners to live beside (they MAY adapt, they are not forced); `x` gains a package
 whose real-`Exec` tests are subprocess tests behind a tag.
 
-Neutral: class B (`pg-rescue` 12 files, `claude-hook-router` 1, `scriptout` 1) is unchanged by this
-decision; whether to tag them as integration is a separate question this spike only surfaces
-(`pg-rescue/internal/runner` takes 24.0 s even without `-race`).
+Neutral: class B is unchanged by this decision. Corrected by bead `pg2-rwfuej` (ADR 0111 in
+`nix-agent-support`, checked against the code): only `pg-rescue` (five `cmd/*` test files, not
+`internal/runner`) and `pg-connector/pkg/scriptout/conformance` (one file, env name
+`GO_WANT_CONFORMANCE_HELPER_PROCESS`) re-execute the test binary; `claude-hook-router` and
+`scriptout/exec_test.go` do not. Whether to tag the real re-exec suites as integration is a
+separate question; `pg-rescue/internal/runner` took 24.0 s even without `-race` for reasons that are
+not re-exec (wall-clock waits; ADR 0111, decision 1).
 
 ## Appendix A: proposed follow-up beads
 
@@ -400,16 +429,37 @@ tier passes with `go test -race -p 4` and the package time is reported before an
    2119 language, states the class B exception and V-4 tagging, and links `x`. Depends on: bead 1
    (it names the package).
 9. **Guard against new re-exec doubles** (repo to be chosen by the orchestrator: a hook in
-   `nix-repo-base` or `nix-agent-support`). Scope: flag `GO_WANT_HELPER_PROCESS` in an untagged
-   test file; reverse the `os.Args[0]` allowance in `pg-connector/.../unit_tier_guard_test.go`.
-   Acceptance: the check passes on `main` once beads 2 to 6 land and class B files are tagged (or
-   explicitly allowlisted by path with a reason), and a seeded untagged re-exec file fails it.
-   Depends on: beads 2 to 6 and bead 10.
+   `nix-repo-base` or `nix-agent-support`). Scope (corrected by bead `pg2-rwfuej`): flag BOTH
+   env names in an untagged test file, `GO_WANT_HELPER_PROCESS` and
+   `GO_WANT_CONFORMANCE_HELPER_PROCESS` (the `scriptout/conformance` helper uses the second, which
+   a check on the first literal would miss), that is, the pattern `GO_WANT_[A-Z0-9_]*HELPER_PROCESS`;
+   and reverse the `os.Args[0]` allowance in
+   `pg-connector/cmd/pg-connector/unit_tier_guard_test.go` (the guard's header then allowed "the
+   re-exec-the-test-binary helper-process pattern (os.Args[0])" in the unit tier, which is the
+   opposite of this rule). The guard MUST NOT ship with the allowance still in place, and the two
+   MUST flip consistently in one change, or the module guard keeps blessing the pattern the new
+   check forbids. Acceptance: the check passes on `main` once beads 2 to 6 land and the remaining
+   real re-exec files (`pg-rescue` `cmd/*`, `scriptout/conformance`) are tagged (or explicitly
+   allowlisted by path with a reason), and a seeded untagged re-exec file fails it, once per env
+   name. Depends on: beads 2 to 6 and bead 10.
+
+   Status (bead `pg2-rwfuej`, read from `nix-agent-support` at `aa01f65ca`): the guard has already
+   landed there (bead `pg2-ty6mjm`, commit `6435e88ea`): the `no-reexec-test-doubles` hook
+   (`scripts/check-no-reexec-test-doubles.sh`, pattern `GO_WANT_[A-Z0-9_]*HELPER_PROCESS`) with the
+   path allowlist `scripts/reexec-test-double-allowlist.txt` (the five `pg-rescue` `cmd/*` files and
+   `scriptout/conformance`), and the `os.Args[0]` allowance in `unit_tier_guard_test.go` is reversed
+   (a re-exec is a violation unless the file is listed in `unitReexecAllowed`).
+
 10. **Investigate tagging the class B re-exec suites as integration** (repo `nix-agent-support`;
-    spike-sized). Scope: `pg-rescue` (12 files), `claude-hook-router`, `pg-connector/pkg/scriptout`;
-    decide per suite whether it is a unit test (a few real-process cases, kept) or must move behind
-    a tag with its own check (ADR 0024 in `nix-repo-base`). Acceptance: a written decision per
-    package with the measured package time with and without `-race`.
+    spike-sized). Scope (corrected by bead `pg2-rwfuej`): the suites that really re-execute,
+    `pg-rescue` (the five `cmd/*` files) and `pg-connector/pkg/scriptout/conformance`. NOT
+    `claude-hook-router` (no re-exec; a V-3 single-process suite that stays unit), NOT
+    `scriptout/exec_test.go` (no re-exec; the string `GO_WANT_HELPER_PROCESS` is only a comment
+    there) and NOT `pg-rescue/internal/runner` (builds its helper without the race detector; its
+    cost is wall-clock waits, decided in ADR 0111, decision 1). Decide per suite whether it is a unit
+    test (a few real-process cases, kept) or must move behind a tag with its own check (ADR 0024 in
+    `nix-repo-base`). Acceptance: a written decision per package with the measured package time with
+    and without `-race`. Done as spike `pg2-8h14y2` (ADR 0111 in `nix-agent-support`).
 
 ## Appendix B: what this spike did not verify
 
