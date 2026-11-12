@@ -51,6 +51,12 @@ type Call struct {
 	OwnProcGroup bool
 	// WaitDelay overrides DefaultWaitDelay when positive.
 	WaitDelay time.Duration
+	// Timeout, when positive, bounds the run: Exec derives a child context
+	// with this timeout, kills the child when it expires and reports
+	// Result.TimedOut. Zero means no bound beyond the caller's context.
+	// Every Call in production code SHOULD set it; see cmdruntest.
+	// AssertCallsBounded.
+	Timeout time.Duration
 }
 
 // Result is the outcome of one Call. The fields keep "the child never
@@ -71,6 +77,11 @@ type Result struct {
 	// context was already done). Nil on a clean run, whatever the context
 	// did afterwards.
 	CtxErr error
+	// TimedOut is true when Call.Timeout expired and ended the child (CtxErr
+	// is then context.DeadlineExceeded). It stays false when the caller's own
+	// context ended the run first, so a timeout is distinguishable from a
+	// caller cancel or a caller-supplied deadline.
+	TimedOut bool
 	// StartErr is non-nil when the child never started (unknown program, bad
 	// Dir, an already-done context). A non-zero exit is NOT a StartErr.
 	StartErr error

@@ -28,6 +28,7 @@ import (
 func RunContract(t *testing.T, r cmdrun.Runner) {
 	t.Helper()
 	sh := func(script string) cmdrun.Call {
+		//cmdrun:unbounded contract scripts are short and the suite supplies the context
 		return cmdrun.Call{Name: "sh", Args: []string{"-c", script}}
 	}
 
@@ -123,6 +124,7 @@ func RunContract(t *testing.T, r cmdrun.Runner) {
 	})
 
 	t.Run("UnknownProgramIsAStartError", func(t *testing.T) {
+		//cmdrun:unbounded the program never starts
 		res := r(t.Context(), cmdrun.Call{Name: "cmdrun-no-such-program-xyz"})
 		if res.StartErr == nil {
 			t.Fatalf("StartErr nil for an unknown program: %+v", res)

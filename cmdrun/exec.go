@@ -18,6 +18,12 @@ import (
 // holds its pipes open is released after the wait delay and reported as the
 // clean run it was, with whatever output arrived by then.
 func Exec(ctx context.Context, c Call) Result {
+	parent := ctx
+	if c.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
 	cmd.Dir = c.Dir
 	if len(c.Stdin) > 0 {
@@ -52,6 +58,7 @@ func Exec(ctx context.Context, c Call) Result {
 		res.Code = -1
 		res.StartErr = runErr
 		res.CtxErr = ctx.Err()
+		res.TimedOut = timedOut(c, parent, res.CtxErr)
 		return res
 	}
 
@@ -62,8 +69,15 @@ func Exec(ctx context.Context, c Call) Result {
 	}
 	if runErr != nil {
 		res.CtxErr = ctx.Err()
+		res.TimedOut = timedOut(c, parent, res.CtxErr)
 	}
 	return res
+}
+
+// timedOut reports whether ctxErr came from c.Timeout rather than from the
+// caller's own context.
+func timedOut(c Call, parent context.Context, ctxErr error) bool {
+	return c.Timeout > 0 && errors.Is(ctxErr, context.DeadlineExceeded) && parent.Err() == nil
 }
 
 // buildEnv returns the child environment for c. The result is never nil, so

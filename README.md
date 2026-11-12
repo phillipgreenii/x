@@ -50,6 +50,15 @@ There are no release tags; pin a commit and bump it like any other dependency.
   re-executing the test binary (`GO_WANT_HELPER_PROCESS`): a race-built child costs about a second
   per call, a real `sh` about 9 ms. `cmdruntest.RunContract(t, runner)` is the contract suite
   against real `sh`; an adapter that wraps `Exec` MUST run it from an `integration`-tagged test.
+  **Timeouts:** every `Call` SHOULD set `Timeout`; when positive, `Exec` derives a child context
+  with it, kills the child at expiry and sets `Result.TimedOut` (with `CtxErr` =
+  `context.DeadlineExceeded`). `TimedOut` stays false when the caller's own context ended the run,
+  so a timeout is distinguishable from a cancel. `cmdruntest.AssertCallsBounded(t, moduleRoot)` is
+  the guard: it parses a module's non-test Go files and fails on a `cmdrun.Call` literal with no
+  `Timeout` field, unless the literal carries a `//cmdrun:unbounded <reason>` comment (non-empty
+  reason, on the line above or the line the literal starts on). Adoption: each module adds one test
+  calling `cmdruntest.AssertCallsBounded(t, ".")`, after bounding or annotating its existing calls;
+  the guard is a test, not a runtime refusal. Guard fixtures live in `cmdruntest/testdata`.
   Design and scope: [`docs/adr/0001-shared-command-runner-seam.md`](docs/adr/0001-shared-command-runner-seam.md).
 - **`gitfixture`** / **`gittest`** — hermetic, real git repositories for tests. Tests that need git
   MUST use these rather than hand-rolling `git init` or `exec.Command("git", ...)`. See
