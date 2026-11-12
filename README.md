@@ -63,6 +63,57 @@ There are no release tags; pin a commit and bump it like any other dependency.
 - **`gitfixture`** / **`gittest`** — hermetic, real git repositories for tests. Tests that need git
   MUST use these rather than hand-rolling `git init` or `exec.Command("git", ...)`. See
   [Git fixtures](#git-fixtures).
+- **`lifecycle`** — the run group of a long-running daemon: one signal context, the daemon's loops
+  under an `errgroup` (adds `golang.org/x/sync` to your `go.mod`), and one hard shutdown deadline.
+  See [Daemon lifecycle](#daemon-lifecycle).
+
+## Daemon lifecycle
+
+`lifecycle.New(ctx, lifecycle.Options{...})` returns a `Group`. The first SIGINT or SIGTERM ends
+`g.Context()` (as does a loop returning an error) and starts the shutdown clock. The signal
+registration is released at that moment (`context.AfterFunc(ctx, stop)`), so a second signal gets the
+default action and kills the process. If the loops have not all returned within `Deadline` of the
+context ending, a watchdog logs `shutdown_overrun` (deadline, the phase set by `g.SetPhase`, and every
+loop still running with its age) and calls `Exit(ExitCode)`, so a stuck goroutine cannot keep the
+state lock (and the next start) hostage. A clean `Run` disarms it. The package never sleeps: its only
+clock use is `time.Now` and one `time.AfterFunc`, so tests run under `testing/synctest`.
+
+```go
+deadline := lifecycle.DeadlineFlag(flag.CommandLine, "shutdown-deadline", 8*time.Second)
+flag.Parse()
+
+g := lifecycle.New(context.Background(), lifecycle.Options{
+	Deadline: *deadline,
+	ExitCode: 10,        // a status the supervisor treats as a failure
+	Log:      rawLogger, // MUST NOT take a lock a stuck loop could hold
+})
+g.Go("http", func(ctx context.Context) error { return serve(ctx) })
+g.Go("sweeper", func(ctx context.Context) error { return sweep(ctx) })
+// call g.SetPhase("drain_queue") as shutdown proceeds, so an overrun names where it hung
+if err := g.Run(); err != nil {
+	log.Fatal(err)
+}
+```
+
+The deadline is owned by nix, not by the daemon: the module passes it to the daemon as
+`--shutdown-deadline` and derives launchd's `ExitTimeOut` from the same value, so the two cannot
+drift. `ExitTimeOut` MUST exceed the deadline so the watchdog fires before launchd sends SIGKILL
+(launchd clamps it at 60 s):
+
+```nix
+let
+  shutdownDeadline = 8; # seconds, the single source
+  margin = 7;
+in
+{
+  command = "exec ${pkg}/bin/mydaemon serve --shutdown-deadline=${toString shutdownDeadline}s";
+  serviceConfig.ExitTimeOut = shutdownDeadline + margin;
+}
+```
+
+`Options.OnEvent` receives `shutdown_signal`, `shutdown_phase`, `shutdown_complete`,
+`shutdown_overrun`, `loop_started` and `loop_stopped` for logging or metrics. `Options.Exit` and
+`Options.Notify` exist for tests: pass a fake `Notify` and an `Exit` that records the code.
 
 ## Testing
 
