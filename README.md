@@ -63,9 +63,42 @@ There are no release tags; pin a commit and bump it like any other dependency.
 - **`gitfixture`** / **`gittest`** — hermetic, real git repositories for tests. Tests that need git
   MUST use these rather than hand-rolling `git init` or `exec.Command("git", ...)`. See
   [Git fixtures](#git-fixtures).
+- **`exitcode`** — the shared, coarse process exit codes for every workspace CLI and daemon, as
+  named constants with doc comments. See [Exit codes](#exit-codes).
 - **`lifecycle`** — the run group of a long-running daemon: one signal context, the daemon's loops
   under an `errgroup` (adds `golang.org/x/sync` to your `go.mod`), and one hard shutdown deadline.
   See [Daemon lifecycle](#daemon-lifecycle).
+
+## Exit codes
+
+Package `exitcode` is the one table of process exit codes. A caller MAY branch on any of them
+from any tool. Codes are coarse and app-neutral ("the daemon is down" has a slot; "the recorder is
+behind" does not). Each constant's doc comment says when to use it and when not to; the test pins
+every value, so a renumbering is a visible diff.
+
+| Code                         | Constant           | Meaning                                                                                      |
+| ---------------------------- | ------------------ | -------------------------------------------------------------------------------------------- |
+| 0                            | `OK`               | success (an empty answer that is valid is still success)                                     |
+| 1                            | `Error`            | generic or unexpected error; carries no branchable meaning                                   |
+| 2                            | `Usage`            | bad command line; the request was not attempted                                              |
+| 3                            | `Unavailable`      | a needed dependency is down, unreachable or not ready; also every source of a fan-out failed |
+| 4                            | `NotFound`         | the named thing does not exist (the lookup itself worked)                                    |
+| 5                            | `Degraded`         | ran, but the result is partial or the system is impaired; output is still meaningful         |
+| 6                            | `Timeout`          | the command's own time budget ran out; outcome unknown                                       |
+| 7                            | `Config`           | configuration input invalid or missing; the operator must edit it                            |
+| 8                            | `Denied`           | unauthenticated or not permitted; the fix is a login, token or permission                    |
+| 9                            | `Busy`             | valid request declined for now (lock held, pool exhausted, policy gate); retry later         |
+| 10                           | `ShutdownOverrun`  | a daemon's shutdown watchdog fired (see `lifecycle`)                                         |
+| 11                           | `Conflict`         | the state the request assumed changed (moved head, version mismatch, failed precondition)    |
+| 12 to 19                     |                    | reserved for future shared codes                                                             |
+| 20 to 63                     | `AppMin`..`AppMax` | app-specific; an app MUST document each in its help and README                               |
+| 64 to 78, 124, 126, 127, 255 |                    | never assigned (sysexits, `timeout(1)`, shell, runtime)                                      |
+| 128+n                        |                    | the shell's "killed by signal n"; MUST NOT be assigned, only relayed from a child            |
+
+An app MUST NOT reuse a shared value for a different meaning and MUST NOT give 1 a branchable
+meaning. The inventory of the codes the apps used when this table was defined, mapped to the
+shared codes, is [`docs/exit-codes.md`](docs/exit-codes.md); adopting the table in an app is a
+separate change that updates the app and every caller of its codes together.
 
 ## Daemon lifecycle
 
