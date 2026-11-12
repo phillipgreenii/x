@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 // Exec is the real Runner: it starts c as a child process, waits for it,
@@ -14,7 +15,9 @@ import (
 // and never returns a Go error; every failure is a Result field.
 //
 // A context end kills the child (SIGKILL), or the whole process group when
-// c.OwnProcGroup is set. A child that exits cleanly while a grandchild still
+// c.OwnProcGroup is set. When c.TermGrace is positive the end sends SIGTERM
+// first (to the group under OwnProcGroup) and SIGKILL only if the child is
+// still running TermGrace later. A child that exits cleanly while a grandchild still
 // holds its pipes open is released after the wait delay and reported as the
 // clean run it was, with whatever output arrived by then.
 func Exec(ctx context.Context, c Call) Result {
@@ -35,19 +38,47 @@ func Exec(ctx context.Context, c Call) Result {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	cmd.WaitDelay = DefaultWaitDelay
+	waitDelay := DefaultWaitDelay
 	if c.WaitDelay > 0 {
-		cmd.WaitDelay = c.WaitDelay
+		waitDelay = c.WaitDelay
 	}
+	cmd.WaitDelay = waitDelay
 	if c.OwnProcGroup {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error {
-			err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			if errors.Is(err, syscall.ESRCH) {
-				return os.ErrProcessDone
-			}
-			return err
+	}
+	// signal delivers sig to the child, or to its whole process group when
+	// OwnProcGroup is set. A vanished target is reported as os.ErrProcessDone.
+	signal := func(sig syscall.Signal) error {
+		pid := cmd.Process.Pid
+		if c.OwnProcGroup {
+			pid = -pid
 		}
+		err := syscall.Kill(pid, sig)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	switch {
+	case c.TermGrace > 0:
+		// The pipe-release delay only starts counting once the grace has
+		// run out, so it is added on top of the grace.
+		cmd.WaitDelay = c.TermGrace + waitDelay
+		var killTimer *time.Timer
+		defer func() {
+			if killTimer != nil {
+				killTimer.Stop()
+			}
+		}()
+		cmd.Cancel = func() error {
+			if err := signal(syscall.SIGTERM); err != nil {
+				return err
+			}
+			killTimer = time.AfterFunc(c.TermGrace, func() { _ = signal(syscall.SIGKILL) })
+			return nil
+		}
+	case c.OwnProcGroup:
+		cmd.Cancel = func() error { return signal(syscall.SIGKILL) }
 	}
 
 	runErr := cmd.Run()

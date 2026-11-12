@@ -18,7 +18,7 @@ import (
 // RunContract exercises r against the real POSIX sh: exit codes, the
 // stdout/stderr split, stdin, both env modes, the working directory, a
 // start error, signal death, context cancel and the opt-in process-group
-// kill. It is the one place the thin real wrapper is tested; an adapter
+// kill and the opt-in SIGTERM grace. It is the one place the thin real wrapper is tested; an adapter
 // that wraps cmdrun.Exec calls it from its own tests so its mapping cannot
 // drift from the contract.
 //
@@ -251,6 +251,87 @@ func RunContract(t *testing.T, r cmdrun.Runner) {
 		}
 	})
 
+	t.Run("TermGraceLetsATrappingChildCleanUpBeforeKill", func(t *testing.T) {
+		dir := t.TempDir()
+		ready, marker := filepath.Join(dir, "ready"), filepath.Join(dir, "cleaned")
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go cancelWhenExists(ctx, cancel, ready)
+		c := sh(`trap 'echo cleaned > ` + marker + `; exit 0' TERM; echo > ` + ready + `; sleep 30 & wait`)
+		c.OwnProcGroup = true
+		c.TermGrace = 10 * time.Second
+		start := time.Now()
+		res := r(ctx, c)
+		requirePromptly(t, start, 8*time.Second)
+		if !errors.Is(res.CtxErr, context.Canceled) {
+			t.Fatalf("CtxErr = %v, want Canceled (%+v)", res.CtxErr, res)
+		}
+		eq(t, "signal", res.Signal, "")
+		eq(t, "code", strconv.Itoa(res.Code), "0")
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("the child's TERM handler did not run: %v", err)
+		}
+	})
+
+	t.Run("TermGraceKillsAChildThatIgnoresTermAfterTheGrace", func(t *testing.T) {
+		dir := t.TempDir()
+		ready := filepath.Join(dir, "ready")
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go cancelWhenExists(ctx, cancel, ready)
+		c := sh(`trap '' TERM; echo > ` + ready + `; sleep 30 & wait`)
+		c.OwnProcGroup = true
+		c.TermGrace = 500 * time.Millisecond
+		c.WaitDelay = 500 * time.Millisecond
+		start := time.Now()
+		res := r(ctx, c)
+		elapsed := time.Since(start)
+		requirePromptly(t, start, 10*time.Second)
+		if !errors.Is(res.CtxErr, context.Canceled) {
+			t.Fatalf("CtxErr = %v, want Canceled (%+v)", res.CtxErr, res)
+		}
+		eq(t, "signal", res.Signal, "killed")
+		if elapsed < c.TermGrace {
+			t.Fatalf("ended after %v, before the %v grace", elapsed, c.TermGrace)
+		}
+	})
+
+	t.Run("TermGraceTermsTheGrandchildUnderOwnProcGroup", func(t *testing.T) {
+		dir := t.TempDir()
+		pidFile, ready := filepath.Join(dir, "pid"), filepath.Join(dir, "ready")
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go cancelWhenExists(ctx, cancel, ready)
+		// The shell exits on TERM without killing its child itself, so the
+		// grandchild only dies if the group got the signal.
+		c := sh(`trap 'exit 0' TERM; sleep 30 & echo $! > ` + pidFile + `; echo > ` + ready + `; wait`)
+		c.OwnProcGroup = true
+		c.TermGrace = 10 * time.Second
+		c.WaitDelay = 20 * time.Second
+		start := time.Now()
+		res := r(ctx, c)
+		requirePromptly(t, start, 8*time.Second)
+		if res.CtxErr == nil {
+			t.Fatalf("CtxErr nil after a cancel: %+v", res)
+		}
+		raw, err := os.ReadFile(pidFile)
+		if err != nil {
+			t.Fatalf("grandchild pid file: %v", err)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if err != nil {
+			t.Fatalf("grandchild pid %q: %v", raw, err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for syscall.Kill(pid, 0) == nil {
+			if time.Now().After(deadline) {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				t.Fatalf("grandchild %d survived the group TERM", pid)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+
 	t.Run("ConcurrentCallsDoNotShareState", func(t *testing.T) {
 		const n = 8
 		out := make([]string, n)
@@ -268,6 +349,18 @@ func RunContract(t *testing.T, r cmdrun.Runner) {
 			eq(t, "call "+strconv.Itoa(i), got, strconv.Itoa(i)+"\n")
 		}
 	})
+}
+
+// cancelWhenExists calls cancel once path exists, so a test cancels only
+// after the child has installed its signal handlers.
+func cancelWhenExists(ctx context.Context, cancel context.CancelFunc, path string) {
+	for ctx.Err() == nil {
+		if _, err := os.Stat(path); err == nil {
+			cancel()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func requireClean(t *testing.T, res cmdrun.Result) {

@@ -49,6 +49,15 @@ type Call struct {
 	// for a child that reads the terminal (a background group is stopped by
 	// SIGTTIN).
 	OwnProcGroup bool
+	// TermGrace is opt-in graceful cancel. When positive, a context end (a
+	// caller cancel or Timeout) sends SIGTERM, to the whole process group
+	// when OwnProcGroup is set, and Exec sends SIGKILL (to the same target)
+	// only if the child has not exited TermGrace later. Zero keeps the
+	// immediate SIGKILL. The pipe-release delay (WaitDelay, or
+	// DefaultWaitDelay) starts after the grace, so the longest a cancelled
+	// Exec can block is TermGrace plus that delay. A child that handles
+	// SIGTERM and exits 0 still gets CtxErr set, since the context ended.
+	TermGrace time.Duration
 	// WaitDelay overrides DefaultWaitDelay when positive.
 	WaitDelay time.Duration
 	// Timeout, when positive, bounds the run: Exec derives a child context
