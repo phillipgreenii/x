@@ -35,5 +35,15 @@
       1000,
       2000
     ]
+  },
+  {
+    "name": "pn.spool.swept_files",
+    "unit": "{file}",
+    "kind": "counter"
+  },
+  {
+    "name": "pn.spool.write_errors",
+    "unit": "{error}",
+    "kind": "counter"
   }
 ]

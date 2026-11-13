@@ -31,6 +31,10 @@ var Metrics = []MetricSpec{
 	{Name: "nix.build.duration", Unit: "s", Kind: "histogram"},
 	{Name: "nix.derivations", Unit: "{derivation}", Kind: "counter"},
 	{Name: "pn.plan.builds", Unit: "{derivation}", Kind: "histogram", Buckets: PlanBuildsBuckets},
+	// Spool counters. Attributes are set at the increment call sites:
+	// swept_files has spool=user|root and reason=age|cap.
+	{Name: "pn.spool.swept_files", Unit: "{file}", Kind: "counter"},
+	{Name: "pn.spool.write_errors", Unit: "{error}", Kind: "counter"},
 }
 
 // catalogBuckets returns the catalog's explicit boundaries for the histogram
