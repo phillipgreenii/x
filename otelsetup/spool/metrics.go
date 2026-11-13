@@ -258,7 +258,7 @@ func convertValue(v attribute.Value) *commonpb.AnyValue {
 			return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: s}}
 		})
 	}
-	return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v.Emit()}}
+	return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v.String()}}
 }
 
 func arrayOf[T any](xs []T, f func(T) *commonpb.AnyValue) *commonpb.AnyValue {
