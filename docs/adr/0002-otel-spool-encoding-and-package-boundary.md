@@ -43,11 +43,11 @@
 Scratch module `spike` (copy of `x/go.mod`, `go 1.25.9`, Go toolchain go1.26.8 with
 `GOTOOLCHAIN=local`), outside the repo; `x/go.mod` untouched.
 
-| Item                                                                      | Result                                                                                                                                                                                              |
-| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. pdata resolves with `go 1.25.9` and protobuf v1.36.12, no forced bump  | PASS for `pdata v1.65.0`: the `go.mod` diff is only `+ go.opentelemetry.io/collector/pdata v1.65.0 // indirect`. FAIL for `@latest` (v1.71.0): `go` 1.25.9 to 1.26.0 and grpc, x/net, x/sys, x/text, x/sync upgraded. |
-| 2. Round trip proto to pdata JSON to collector unmarshalers and compare   | PASS: `TestTraceRoundTrip` and `TestMetricRoundTrip`, both `proto.Equal` to the original (fixtures as listed under the oracle).                                                                     |
-| 3. Ids hex, enums integers                                                | PASS (excerpts below).                                                                                                                                                                              |
+| Item                                                                     | Result                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. pdata resolves with `go 1.25.9` and protobuf v1.36.12, no forced bump | PASS for `pdata v1.65.0`: the `go.mod` diff is only `+ go.opentelemetry.io/collector/pdata v1.65.0 // indirect`. FAIL for `@latest` (v1.71.0): `go` 1.25.9 to 1.26.0 and grpc, x/net, x/sys, x/text, x/sync upgraded. |
+| 2. Round trip proto to pdata JSON to collector unmarshalers and compare  | PASS: `TestTraceRoundTrip` and `TestMetricRoundTrip`, both `proto.Equal` to the original (fixtures as listed under the oracle).                                                                                       |
+| 3. Ids hex, enums integers                                               | PASS (excerpts below).                                                                                                                                                                                                |
 
 Added module set (modules providing packages under `ptrace`, `pmetric`, `ptraceotlp`,
 `pmetricotlp`; `go list -deps`), versions as resolved:
@@ -70,11 +70,93 @@ same versions. `go mod tidy` also records `github.com/stretchr/testify v1.12.1 /
 Observed JSON excerpts (pdata `ExportRequest.MarshalJSON`, one line each):
 
 ```json
-{"resourceSpans":[{"resource":{"attributes":[{"key":"pn.spool.file_id","value":{"stringValue":"abc"}}]},"scopeSpans":[{"scope":{"name":"pn","version":"1"},"spans":[{"traceId":"0102030405060708090a0b0c0d0e0f10","spanId":"b1b2b3b4b5b6b7b8","traceState":"k=v","parentSpanId":"a1a2a3a4a5a6a7a8","name":"child","kind":3,"startTimeUnixNano":"1700000000100000000","endTimeUnixNano":"1700000000900000000","attributes":[{"key":"n","value":{"intValue":"42"}}],"events":[{"timeUnixNano":"1700000000200000000","name":"ev"}],"links":[{"traceId":"0102030405060708090a0b0c0d0e0f10","spanId":"c1c2c3c4c5c6c7c8"}],"status":{"message":"boom","code":2}}]}],"schemaUrl":"https://opentelemetry.io/schemas/1.37.0"}]}
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "pn.spool.file_id", "value": { "stringValue": "abc" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "pn", "version": "1" },
+          "spans": [
+            {
+              "traceId": "0102030405060708090a0b0c0d0e0f10",
+              "spanId": "b1b2b3b4b5b6b7b8",
+              "traceState": "k=v",
+              "parentSpanId": "a1a2a3a4a5a6a7a8",
+              "name": "child",
+              "kind": 3,
+              "startTimeUnixNano": "1700000000100000000",
+              "endTimeUnixNano": "1700000000900000000",
+              "attributes": [{ "key": "n", "value": { "intValue": "42" } }],
+              "events": [
+                { "timeUnixNano": "1700000000200000000", "name": "ev" }
+              ],
+              "links": [
+                {
+                  "traceId": "0102030405060708090a0b0c0d0e0f10",
+                  "spanId": "c1c2c3c4c5c6c7c8"
+                }
+              ],
+              "status": { "message": "boom", "code": 2 }
+            }
+          ]
+        }
+      ],
+      "schemaUrl": "https://opentelemetry.io/schemas/1.37.0"
+    }
+  ]
+}
 ```
 
 ```json
-{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"pn.count","unit":"{x}","sum":{"dataPoints":[{"startTimeUnixNano":"1700000000000000000","timeUnixNano":"1700000060000000000","asInt":"7"}],"aggregationTemporality":1,"isMonotonic":true}},{"name":"pn.dur","unit":"s","histogram":{"dataPoints":[{"count":"4","sum":12,"bucketCounts":["1","2","1"],"explicitBounds":[1,5],"min":0.5,"max":9.5}],"aggregationTemporality":1}}]}]}]}
+{
+  "resourceMetrics": [
+    {
+      "scopeMetrics": [
+        {
+          "metrics": [
+            {
+              "name": "pn.count",
+              "unit": "{x}",
+              "sum": {
+                "dataPoints": [
+                  {
+                    "startTimeUnixNano": "1700000000000000000",
+                    "timeUnixNano": "1700000060000000000",
+                    "asInt": "7"
+                  }
+                ],
+                "aggregationTemporality": 1,
+                "isMonotonic": true
+              }
+            },
+            {
+              "name": "pn.dur",
+              "unit": "s",
+              "histogram": {
+                "dataPoints": [
+                  {
+                    "count": "4",
+                    "sum": 12,
+                    "bucketCounts": ["1", "2", "1"],
+                    "explicitBounds": [1, 5],
+                    "min": 0.5,
+                    "max": 9.5
+                  }
+                ],
+                "aggregationTemporality": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
 Notes for the Encoder authors: ids are lowercase hex (not base64); enums (`kind`, `status.code`,
@@ -94,12 +176,12 @@ Method: copy each consumer (`nix-repo-base/modules/pn`, `.../pg-nix-log-wrapped`
 directory, `go mod edit -replace github.com/phillipgreenii/x=<variant>`, `go mod tidy`, then
 `go mod download -json`.
 
-| Variant (x copy)                                                              | pn modules downloaded | pg-nix-log-wrapped modules downloaded | In consumer `go.mod` / `go.sum` |
-| ----------------------------------------------------------------------------- | --------------------- | ------------------------------------- | ------------------------------- |
-| baseline `x` (no pdata)                                                       | 27                    | 24                                    | no pdata                        |
-| subpackage `otelspool` with pdata in `x/go.mod`; consumer imports only `otelsetup` | 27 (identical list)   | 24 (identical list)                   | no pdata, no new module         |
-| nested module `x/otelspool` with its own `go.mod`; `x/go.mod` unchanged       | 27 (identical list)   | not run (same mechanism)              | no pdata                        |
-| subpackage, and `otelsetup` imports it (the planned shape), consumer imports `otelsetup` | not run            | 31 (the 24 plus the 7 modules above) | pdata plus 6 indirect, all hashed |
+| Variant (x copy)                                                                         | pn modules downloaded | pg-nix-log-wrapped modules downloaded | In consumer `go.mod` / `go.sum`   |
+| ---------------------------------------------------------------------------------------- | --------------------- | ------------------------------------- | --------------------------------- |
+| baseline `x` (no pdata)                                                                  | 27                    | 24                                    | no pdata                          |
+| subpackage `otelspool` with pdata in `x/go.mod`; consumer imports only `otelsetup`       | 27 (identical list)   | 24 (identical list)                   | no pdata, no new module           |
+| nested module `x/otelspool` with its own `go.mod`; `x/go.mod` unchanged                  | 27 (identical list)   | not run (same mechanism)              | no pdata                          |
+| subpackage, and `otelsetup` imports it (the planned shape), consumer imports `otelsetup` | not run               | 31 (the 24 plus the 7 modules above)  | pdata plus 6 indirect, all hashed |
 
 Reading: Go's pruned module graph means a consumer's `go.mod` and `go.sum` record only modules that
 supply packages it builds. `go list -m all` does show pdata (98 to 105 entries for pn) because the
