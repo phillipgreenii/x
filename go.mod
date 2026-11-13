@@ -1,6 +1,6 @@
 module github.com/phillipgreenii/x
 
-go 1.25.9
+go 1.26.8
 
 require (
 	go.opentelemetry.io/collector/pdata v1.65.0
