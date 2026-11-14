@@ -22,8 +22,15 @@ import (
 //
 // The file is APPENDED to, never truncated, so restarting the app keeps the
 // previous run's log. It stays open for the process lifetime (the logger owns
-// it; there is nothing to close on a long-running daemon).
-func New(app string) (*slog.Logger, error) {
+// it; there is nothing to close on a long-running daemon). The file is a
+// RotatingFile: it reopens if renamed or removed underneath the process, and
+// WithMaxBytes caps its size. Options add a service attribute, a level, key
+// renames or another writer.
+func New(app string, opts ...Option) (*slog.Logger, error) {
+	c := newConfig(opts)
+	if c.writer != nil {
+		return NewLogger(c.writer, opts...), nil
+	}
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
 		home := os.Getenv("HOME")
@@ -36,15 +43,11 @@ func New(app string) (*slog.Logger, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, app+".jsonl"),
-		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := OpenRotatingFile(filepath.Join(dir, app+".jsonl"), c.maxBytes)
 	if err != nil {
 		return nil, err
 	}
-	// slog defaults to local-time and mixed-case level names, so both are
-	// normalized by ReplaceAttr.
-	h := slog.NewJSONHandler(f, &slog.HandlerOptions{ReplaceAttr: ReplaceAttr})
-	return slog.New(h), nil
+	return NewLogger(f, opts...), nil
 }
 
 // ReplaceAttr normalizes slog output to this package's JSONL contract:

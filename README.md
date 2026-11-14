@@ -13,7 +13,7 @@ There are no release tags; pin a commit and bump it like any other dependency.
 
 ## Packages
 
-- **`jsonllogger`** — structured JSONL logging to a per-app log file. Use it when a CLI tool or
+- **`jsonllogger`** — structured JSONL logging to a per-app log file. Options add a `service` field, level, key renames, an injected writer, size cap and rotation-safe reopen; `Fanout` and `jsonllogger/jsonlloggertest` cover multi-sink and tests. Use it when a CLI tool or
   daemon needs a durable, appendable log file instead of plain stdout/stderr — for example, a
   daemon whose logs should survive restarts and be tailed or shipped elsewhere.
 - **`osdirs`** — resolves an app's XDG state/config directory, falling back to `$HOME` when the
