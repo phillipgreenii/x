@@ -1,8 +1,10 @@
 package otelsetup
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -523,7 +525,24 @@ func TestMetricsJSONUpToDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(want) {
+	// treefmt reflows whitespace in the committed file (for example it
+	// collapses the bucket arrays onto one line), so compare the JSON
+	// content, not the bytes.
+	if !jsonEqual(t, got, want) {
 		t.Fatal("metrics.json is stale; run `go generate ./otelsetup`")
 	}
+}
+
+// jsonEqual reports whether a and b are the same JSON document once
+// insignificant whitespace is removed.
+func jsonEqual(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var ca, cb bytes.Buffer
+	if err := json.Compact(&ca, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Compact(&cb, b); err != nil {
+		t.Fatal(err)
+	}
+	return bytes.Equal(ca.Bytes(), cb.Bytes())
 }
