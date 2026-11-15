@@ -10,6 +10,8 @@ package cmdrun
 
 import (
 	"context"
+	"io"
+	"os"
 	"time"
 )
 
@@ -44,6 +46,23 @@ type Call struct {
 	// Env and EnvMode: see EnvMode.
 	Env     []string
 	EnvMode EnvMode
+	// ExtraFiles are additional files the child inherits, appended after
+	// stdin/stdout/stderr: ExtraFiles[i] becomes the child's file descriptor
+	// 3+i (exec.Cmd.ExtraFiles semantics, so a parent-death pipe's read end
+	// is fd 3 when it is the first entry). The caller owns the files: Exec
+	// neither closes them nor mutates the slice, and the caller MUST keep
+	// them open until Exec returns (a parent-death pipe's write end is kept
+	// open by the caller for the same reason). Nil or empty inherits nothing
+	// extra.
+	ExtraFiles []*os.File
+	// StderrWriter, when non-nil, receives the child's stderr live, as it is
+	// written, in addition to (not instead of) the capture: Result.Stderr
+	// still holds every byte the child wrote to stderr, so error text built
+	// from Result.Stderr is the same whether or not a writer is set. Writes
+	// come from a single goroutine at a time and may be partial lines. A
+	// write error from the writer does not fail the run. Nil means capture
+	// only. Exec does not close the writer.
+	StderrWriter io.Writer
 	// OwnProcGroup is opt-in: the child runs in its own process group and a
 	// context end kills the whole group, not just the child. Leave it off
 	// for a child that reads the terminal (a background group is stopped by

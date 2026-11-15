@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
@@ -37,6 +38,10 @@ func Exec(ctx context.Context, c Call) Result {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if c.StderrWriter != nil {
+		cmd.Stderr = io.MultiWriter(&stderr, ignoreErrWriter{c.StderrWriter})
+	}
+	cmd.ExtraFiles = c.ExtraFiles
 
 	waitDelay := DefaultWaitDelay
 	if c.WaitDelay > 0 {
@@ -122,4 +127,14 @@ func buildEnv(c Call) []string {
 	env := make([]string, 0, len(parent)+len(c.Env))
 	env = append(env, parent...)
 	return append(env, c.Env...)
+}
+
+// ignoreErrWriter forwards to w but never reports a failure, so a broken live
+// writer cannot abort the stderr copy (io.MultiWriter stops at the first
+// error) or the capture alongside it.
+type ignoreErrWriter struct{ w io.Writer }
+
+func (i ignoreErrWriter) Write(p []byte) (int, error) {
+	_, _ = i.w.Write(p)
+	return len(p), nil
 }
