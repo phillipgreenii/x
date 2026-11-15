@@ -26,11 +26,11 @@ Source: the 2026-11-11 pg-apps deep review (findings XO-05, XO-09, XO-14) and op
 
 ## Per-app gap list and adoption beads proposed
 
-| App (repo)                           | Gaps closed by x now                                          | Still blocks full adoption                                      |
-| ------------------------------------ | ------------------------------------------------------------- | --------------------------------------------------------------- |
-| pg-router (nix-agent-support)        | writer, service, level, Fanout, shutdown signals              | scrape reader, OTLP log bridge in x; keep `eventlog`            |
-| pg-router handlers                   | service field, stderr writer, test buffer                     | none; call `NewLogger(os.Stderr, WithService)`                  |
-| pg-connector daemons (github, jira)  | rotation, size cap, service, key renames                      | `logs` has typed `stateLine` rows and three files; map to slog  |
-| pg-desk                              | writer, Fanout, level, service                                | scrape reader, OTLP log bridge                                  |
-| pg-claude-code-recorder              | renames (`ts`, `event`, `file_id`, `generation`), service     | hand-rolled metrics registry replaced by otelsetup scrape       |
-| ccpool, pg-keep-awake, work-report   | none specific                                                 | copied `telemetry` package depends on scrape reader/log bridge  |
+| App (repo)                          | Gaps closed by x now                                      | Still blocks full adoption                                     |
+| ----------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
+| pg-router (nix-agent-support)       | writer, service, level, Fanout, shutdown signals          | scrape reader, OTLP log bridge in x; keep `eventlog`           |
+| pg-router handlers                  | service field, stderr writer, test buffer                 | none; call `NewLogger(os.Stderr, WithService)`                 |
+| pg-connector daemons (github, jira) | rotation, size cap, service, key renames                  | `logs` has typed `stateLine` rows and three files; map to slog |
+| pg-desk                             | writer, Fanout, level, service                            | scrape reader, OTLP log bridge                                 |
+| pg-claude-code-recorder             | renames (`ts`, `event`, `file_id`, `generation`), service | hand-rolled metrics registry replaced by otelsetup scrape      |
+| ccpool, pg-keep-awake, work-report  | none specific                                             | copied `telemetry` package depends on scrape reader/log bridge |
