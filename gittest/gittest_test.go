@@ -174,3 +174,26 @@ func TestClientAtReturnsAHermeticClientAtAWorktree(t *testing.T) {
 		t.Errorf("ClientAt client HEAD = %q, want %q", got, "clientat-wt")
 	}
 }
+
+// TestFromTemplateGivesIndependentCopies covers the adapter: each call
+// copies the template into its own t.TempDir() and defaults Suite to
+// t.Name().
+func TestFromTemplateGivesIndependentCopies(t *testing.T) {
+	tpl, err := gitfixture.NewTemplate(t.Context(), t.TempDir(), gitfixture.RepoOptions{Suite: "tpl", InitialCommit: true}, nil)
+	if err != nil {
+		t.Fatalf("NewTemplate() error = %v", err)
+	}
+	a := gittest.FromTemplate(t, tpl, "")
+	b := gittest.FromTemplate(t, tpl, "named")
+	if a.Root() == b.Root() {
+		t.Fatalf("copies share root %s", a.Root())
+	}
+	out, err := a.Client.Run(t.Context(), "config", "user.name")
+	if err != nil || strings.TrimSpace(string(out)) != "gitfixture "+t.Name() {
+		t.Errorf("A user.name = %q, %v; want suite t.Name()", out, err)
+	}
+	out, err = b.Client.Run(t.Context(), "config", "user.name")
+	if err != nil || strings.TrimSpace(string(out)) != "gitfixture named" {
+		t.Errorf("B user.name = %q, %v", out, err)
+	}
+}

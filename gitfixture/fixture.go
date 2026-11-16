@@ -139,6 +139,11 @@ func hermeticOptions(resolvedRoot string) []gitclient.Option {
 // configureRepo applies the fixture's repo-local config to c: the forensic
 // identity (guarantee 3, D7) and core.hooksPath at the empty hooks
 // directory (guarantee 4).
+// newClient opens a hermetic client at dir under resolvedRoot.
+func newClient(ctx context.Context, dir, resolvedRoot string) (*gitclient.Client, error) {
+	return gitclient.New(ctx, dir, hermeticOptions(resolvedRoot)...)
+}
+
 func configureRepo(ctx context.Context, c *gitclient.Client, resolvedRoot, suite string) error {
 	if _, err := c.Run(ctx, "config", "user.name", "gitfixture "+suite); err != nil {
 		return fmt.Errorf("gitfixture: setting user.name: %w", err)

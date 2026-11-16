@@ -74,3 +74,22 @@ func ClientAt(t *testing.T, repo *gitfixture.Repo, dir string) *gitclient.Client
 	}
 	return c
 }
+
+// FromTemplate creates a fixture repository for t by copying tpl (built
+// once, typically in TestMain, with gitfixture.NewTemplate) into
+// t.TempDir(), failing the test immediately on error. It is the cheap
+// alternative to New for a test that needs a repository with prepared
+// history. If suite is empty it defaults to t.Name(), like New. See
+// gitfixture.Template for what a copy carries.
+func FromTemplate(t *testing.T, tpl *gitfixture.Template, suite string) *gitfixture.Repo {
+	t.Helper()
+
+	if suite == "" {
+		suite = t.Name()
+	}
+	repo, err := tpl.NewRepo(t.Context(), t.TempDir(), suite)
+	if err != nil {
+		t.Fatalf("gittest.FromTemplate: %v", err)
+	}
+	return repo
+}
