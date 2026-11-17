@@ -7,6 +7,7 @@ import (
 	"flag"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -278,6 +279,228 @@ func (w lockedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.b.Write(p)
+}
+
+// A finish with no signal, no loop error and a live parent is not a shutdown:
+// Run's own context release must not log shutdown_signal or shutdown_complete.
+func TestFinishWithoutShutdownEmitsNoShutdownEvents(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fs, r := &fakeSignals{}, &recorder{}
+		g := newGroup(t, fs, r, nil)
+		g.Go("short", func(context.Context) error { return nil })
+		if err := g.Run(); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		for _, n := range r.names() {
+			if n == EvSignal || n == EvClean {
+				t.Fatalf("events = %v, want no %s or %s", r.names(), EvSignal, EvClean)
+			}
+		}
+		if len(r.exitCodes()) != 0 {
+			t.Fatal("hard exit")
+		}
+	})
+}
+
+func TestAttachRegistersNoSignalsAndShutsDownWithParent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := &recorder{}
+		parent, cancel := context.WithCancel(context.Background())
+		g := Attach(parent, Options{
+			Deadline: 8 * time.Second,
+			ExitCode: 42,
+			OnEvent:  r.onEvent,
+			Exit:     r.exit,
+			Notify: func(context.Context, ...os.Signal) (context.Context, context.CancelFunc) {
+				t.Error("Attach registered signals")
+				return nil, nil
+			},
+		})
+		release := make(chan struct{})
+		g.Go("stuck", func(context.Context) error { <-release; return nil })
+		synctest.Wait()
+		cancel() // the daemon's own signal handler
+		time.Sleep(8 * time.Second)
+		synctest.Wait()
+		if got := r.exitCodes(); len(got) != 1 || got[0] != 42 {
+			t.Fatalf("exit calls = %v, want [42]", got)
+		}
+		close(release)
+		_ = g.Run()
+	})
+}
+
+func TestAttachCleanShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := &recorder{}
+		parent, cancel := context.WithCancel(context.Background())
+		g := Attach(parent, Options{OnEvent: r.onEvent, Exit: r.exit})
+		g.Go("loop", func(ctx context.Context) error { <-ctx.Done(); return nil })
+		synctest.Wait()
+		cancel()
+		if err := g.Run(); err != nil {
+			t.Fatal(err)
+		}
+		names := r.names()
+		if len(names) == 0 || names[len(names)-1] != EvClean {
+			t.Fatalf("events = %v, want last %s", names, EvClean)
+		}
+	})
+}
+
+func overrunLog(t *testing.T, opt Options, setup func(*Group)) (string, *recorder) {
+	t.Helper()
+	r := &recorder{}
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	opt.Deadline = 8 * time.Second
+	opt.ExitCode = 42
+	opt.Log = slog.New(slog.NewJSONHandler(lockedWriter{&mu, &buf}, nil))
+	opt.OnEvent = r.onEvent
+	opt.Exit = r.exit
+	parent, cancel := context.WithCancel(context.Background())
+	g := Attach(parent, opt)
+	if setup != nil {
+		setup(g)
+	}
+	release := make(chan struct{})
+	g.Go("stuck", func(context.Context) error { <-release; return nil })
+	synctest.Wait()
+	cancel()
+	time.Sleep(8*time.Second + ProviderTimeout + time.Millisecond)
+	synctest.Wait()
+	close(release)
+	_ = g.Run()
+	mu.Lock()
+	defer mu.Unlock()
+	return buf.String(), r
+}
+
+func TestProvidersFromOptionsAppearInOverrun(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		out, r := overrunLog(t, Options{
+			InFlight:    func() []slog.Attr { return []slog.Attr{slog.Int("jobs", 3)} },
+			PhaseReport: func() (string, []slog.Attr) { return "drain", []slog.Attr{slog.String("q", "deep")} },
+		}, nil)
+		for _, want := range []string{`"jobs":3`, `"q":"deep"`, `"phase":"drain"`} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log missing %s:\n%s", want, out)
+			}
+		}
+		var ev Event
+		for _, e := range r.events {
+			if e.Name == EvOverrun {
+				ev = e
+			}
+		}
+		if len(ev.Attrs) != 2 || ev.Phase != "drain" {
+			t.Errorf("overrun event = %+v", ev)
+		}
+	})
+}
+
+// The recorder builds its providers after the watchdog is armed.
+func TestLateBoundProvidersAppearInOverrun(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		out, _ := overrunLog(t, Options{}, func(g *Group) {
+			g.SetInFlight(func() []slog.Attr { return []slog.Attr{slog.Int("jobs", 7)} })
+			g.SetPhaseReport(func() (string, []slog.Attr) { return "", []slog.Attr{slog.String("q", "late")} })
+		})
+		for _, want := range []string{`"jobs":7`, `"q":"late"`, `"phase":"running"`} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log missing %s:\n%s", want, out)
+			}
+		}
+	})
+}
+
+// A provider stuck on a lock must not defeat the hard exit.
+func TestStuckProviderDoesNotBlockHardExit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		block := make(chan struct{})
+		defer close(block)
+		_, r := overrunLog(t, Options{
+			InFlight: func() []slog.Attr { <-block; return nil },
+		}, nil)
+		if got := r.exitCodes(); len(got) != 1 || got[0] != 42 {
+			t.Fatalf("exit calls = %v, want [42]", got)
+		}
+	})
+}
+
+func TestPhaseDurationsOnShutdownComplete(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fs, r := &fakeSignals{}, &recorder{}
+		var buf bytes.Buffer
+		var mu sync.Mutex
+		g := New(context.Background(), Options{
+			PhaseDurations: true,
+			Log:            slog.New(slog.NewJSONHandler(lockedWriter{&mu, &buf}, nil)),
+			OnEvent:        r.onEvent,
+			Exit:           r.exit,
+			Notify:         fs.notify,
+		})
+		g.Go("loop", func(ctx context.Context) error {
+			<-ctx.Done()
+			g.SetPhase("drain")
+			time.Sleep(2 * time.Second)
+			g.SetPhase("close")
+			time.Sleep(3 * time.Second)
+			return nil
+		})
+		synctest.Wait()
+		time.Sleep(time.Hour) // running time must not count
+		fs.trigger()
+		if err := g.Run(); err != nil {
+			t.Fatal(err)
+		}
+		var ev Event
+		for _, e := range r.events {
+			if e.Name == EvClean {
+				ev = e
+			}
+		}
+		if ev.Total != 5*time.Second {
+			t.Fatalf("total = %v", ev.Total)
+		}
+		var drain, closeD time.Duration
+		for _, p := range ev.Phases {
+			switch p.Name {
+			case "drain":
+				drain = p.Duration
+			case "close":
+				closeD = p.Duration
+			}
+		}
+		if drain != 2*time.Second || closeD != 3*time.Second {
+			t.Fatalf("phases = %+v", ev.Phases)
+		}
+		mu.Lock()
+		out := buf.String()
+		mu.Unlock()
+		for _, want := range []string{`"drain_duration_ms":2000`, `"close_duration_ms":3000`, `"total_ms":5000`} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log missing %s:\n%s", want, out)
+			}
+		}
+	})
+}
+
+func TestPhaseDurationsOffByDefault(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fs, r := &fakeSignals{}, &recorder{}
+		g := newGroup(t, fs, r, nil)
+		g.Go("loop", func(ctx context.Context) error { <-ctx.Done(); return nil })
+		synctest.Wait()
+		fs.trigger()
+		_ = g.Run()
+		for _, e := range r.events {
+			if e.Name == EvClean && (e.Phases != nil || e.Total != 0) {
+				t.Fatalf("durations reported without the option: %+v", e)
+			}
+		}
+	})
 }
 
 // Every loop returning before the context's AfterFunc has run must still
