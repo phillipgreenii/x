@@ -47,4 +47,11 @@ Operator ruling (Phillip, 2026-11-16): "ok stick with lifecycle."
 - Each daemon that still carries its own watchdog migrates to `lifecycle` as separate work.
 - `host-activity`'s sequential phase waiter, which never exits and owns its own deadline timer, is
   a different contract; it MAY adopt the `lifecycle` event-name constants later.
+  Decided 2026-11-17, after `lifecycle` gained provider hooks, per-phase durations and `Attach`:
+  `host-activity` stays excluded. Those additions closed the gaps for the recorder and `pa-monitor`,
+  but not this one. `lifecycle` hard-exits from its timer goroutine with `os.Exit`, while
+  `host-activity` returns exit code 10 from its run loop so deferred cleanup still runs; and it logs
+  `shutdown_started` and `shutdown_done` where `lifecycle` logs `shutdown_signal` and
+  `shutdown_complete`. Adopting it would change both the exit path and the event names, so it is
+  not a no-behaviour-change move. Revisit if the cleanup moves into the loops themselves.
 - The `daemonstop` commit stays in `x` history; only its content is removed.
