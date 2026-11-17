@@ -94,15 +94,22 @@ func setupBlockableRepo(t *testing.T, ctx context.Context) (*Client, string) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
-	if _, err := c.Run(ctx, "commit", "--allow-empty", "-m", "seed"); err != nil {
-		t.Fatalf("seeding a commit: %v", err)
-	}
 	hooksDir := filepath.Join(dir, "test-hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", hooksDir, err)
 	}
 	if _, err := c.Run(ctx, "config", "core.hooksPath", hooksDir); err != nil {
 		t.Fatalf("configuring core.hooksPath: %v", err)
+	}
+	// Repo-local identity so the seed commit works on a runner (CI) with no
+	// user.name/user.email; without it git exits 128 "Author identity unknown".
+	for _, kv := range [][2]string{{"user.name", "example-user"}, {"user.email", "example-user@example.invalid"}} {
+		if _, err := c.Run(ctx, "config", kv[0], kv[1]); err != nil {
+			t.Fatalf("configuring %s: %v", kv[0], err)
+		}
+	}
+	if _, err := c.Run(ctx, "commit", "--allow-empty", "-m", "seed"); err != nil {
+		t.Fatalf("seeding a commit: %v", err)
 	}
 	return c, hooksDir
 }
