@@ -13,7 +13,12 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
+      - run: sudo apt-get update && sudo apt-get install -y tmux
       - run: go vet ./...
       - run: go test -race ./...
       - run: go test -race -tags integration,contract ./...
+        env:
+          X_REQUIRE_TOOLS: "1"
       - run: .github/scripts/check-coverage.sh
+        env:
+          X_REQUIRE_TOOLS: "1"

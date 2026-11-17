@@ -60,6 +60,16 @@ There are no release tags; pin a commit and bump it like any other dependency.
   calling `cmdruntest.AssertCallsBounded(t, ".")`, after bounding or annotating its existing calls;
   the guard is a test, not a runtime refusal. Guard fixtures live in `cmdruntest/testdata`.
   Design and scope: [`docs/adr/0001-shared-command-runner-seam.md`](docs/adr/0001-shared-command-runner-seam.md).
+- **`tmux`** — a small tmux client over a `cmdrun.Runner`, bound to one `-L` socket and config file
+  (`Client{Bin, Socket, Conf, Run}`). `NewSession`, `State` (exists / pane dead, with the exact-match
+  `=name` target), `PanePID`, `Dead` (exit status, signal and output tail of a dead pane), `List`
+  and `Kill`; a missing server, stale socket or missing session reads as "absent", not an error.
+  Every call takes a `context.Context` and is bounded to 10 s. Its integration tests need a real
+  `tmux`; with `X_REQUIRE_TOOLS=1` (set in CI) a missing tmux fails them instead of skipping.
+- **`claudetrust`** — pre-trusts working directories in Claude Code's `.claude.json` so an
+  automated `claude` launch does not stall on the folder-trust prompt: `Ensure(path, cwds...)` is a
+  merge-only, atomic write of `.projects[cwd].hasTrustDialogAccepted` that keeps every other key,
+  and `IsTrusted(path, cwd)` reads it.
 - **`gitfixture`** / **`gittest`** — hermetic, real git repositories for tests. Tests that need git
   MUST use these rather than hand-rolling `git init` or `exec.Command("git", ...)`. See
   [Git fixtures](#git-fixtures).
