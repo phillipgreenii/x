@@ -4,7 +4,7 @@
 // Seeded from the ccpool tmux client in nix-agent-support
 // (packages/ccpool/internal/tmux), rewritten to take a cmdrun.Runner and a
 // context on every call. The API is a starting set; callers add what they
-// need (send-keys, paste, capture) as they need it.
+// need as they need it.
 //
 // Every call is `tmux -L <Socket> -f <Conf> ...` with a 10 second timeout, and
 // session targets use `=<name>` so tmux matches the name exactly, never as a
@@ -19,6 +19,8 @@ package tmux
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -54,8 +56,15 @@ const callTimeout = 10 * time.Second
 type Client struct {
 	Bin    string // absolute path to tmux
 	Socket string // -L socket name
-	Conf   string // passed as -f; empty means -f /dev/null
-	Run    cmdrun.Runner
+	Conf   string // passed as -f; empty means -f /dev/null (unless UserConf)
+	// UserConf leaves -f off the command line when Conf is empty, so tmux
+	// reads the user's own configuration instead of /dev/null.
+	UserConf bool
+	// RemainOnExit, when set (for example "failed"), is applied to the new
+	// pane in the same tmux invocation as NewSession, so it is in force before
+	// the process can exit and a quick failure still leaves its dead pane.
+	RemainOnExit string
+	Run          cmdrun.Runner
 }
 
 // SessionState is what State reports about a session.
@@ -86,13 +95,20 @@ func (c Client) WriteConf(lines ...string) error {
 // ("K=V") are exported at the session level with -e, in the given order.
 func (c Client) NewSession(ctx context.Context, name, cwd string, env, argv []string) error {
 	// tmux format-expands -c, so a literal # is sent as ##.
-	args := []string{"new-session", "-d", "-s", name, "-c", strings.ReplaceAll(cwd, "#", "##")}
+	args := []string{"new-session", "-d", "-s", name}
+	if cwd != "" {
+		args = append(args, "-c", strings.ReplaceAll(cwd, "#", "##"))
+	}
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}
 	args = append(args, "--")
 	args = append(args, argv...)
-	_, err := c.run(ctx, args...)
+	var tail []string
+	if c.RemainOnExit != "" {
+		tail = []string{"set-option", "-t", "=" + name + ":", "remain-on-exit", c.RemainOnExit}
+	}
+	_, err := c.exec(ctx, nil, tail, args)
 	return err
 }
 
@@ -187,6 +203,141 @@ func (c Client) Kill(ctx context.Context, name string) error {
 	return nil
 }
 
+// PaneStatus is what the server knows about a session's pane.
+type PaneStatus struct {
+	Exists bool   // false when the session is not on the socket
+	Dead   bool   // the pane's process has ended
+	Status int    // exit status, valid when Dead and Signal == ""
+	Signal string // the signal that ended it as tmux prints it ("term" or a number), or ""
+}
+
+// PaneStatus reports whether the session exists and, if so, how its pane's
+// process ended. has-session gates the pane query because display-message
+// falls back to another session for a target that does not exist. A missing
+// server or session is Exists == false, not an error.
+func (c Client) PaneStatus(ctx context.Context, name string) (PaneStatus, error) {
+	if _, err := c.run(ctx, "has-session", "-t", "="+name); err != nil {
+		if isGone(err) {
+			return PaneStatus{}, nil
+		}
+		return PaneStatus{}, err
+	}
+	out, err := c.run(ctx, "display-message", "-p", "-t", "="+name+":",
+		"#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}")
+	if err != nil {
+		return PaneStatus{}, err
+	}
+	// Split on every "|" and never Fields: an empty status (a signal death) or
+	// an empty signal (an exit) keeps its position.
+	parts := strings.Split(strings.TrimRight(out, "\n"), "|")
+	if len(parts) != 3 {
+		return PaneStatus{}, fmt.Errorf("tmux: unexpected pane state %q", strings.TrimSpace(out))
+	}
+	ps := PaneStatus{Exists: true, Dead: parts[0] == "1", Signal: strings.TrimSpace(parts[2])}
+	if parts[1] != "" {
+		if ps.Status, err = strconv.Atoi(parts[1]); err != nil {
+			return PaneStatus{}, fmt.Errorf("tmux: pane_dead_status %q: %w", parts[1], err)
+		}
+	}
+	return ps, nil
+}
+
+// SendKeys sends key tokens (for example "Enter", "Escape") to the session's
+// pane; each token is a key name or literal text, as tmux send-keys reads it.
+func (c Client) SendKeys(ctx context.Context, name string, keys ...string) error {
+	_, err := c.run(ctx, append([]string{"send-keys", "-t", "=" + name + ":"}, keys...)...)
+	return err
+}
+
+// Paste delivers body to the session by bracketed paste, so a multi-line or
+// special-character body arrives as one message instead of being read as keys.
+// The caller sends Enter separately to submit. The tmux buffer name is unique
+// per call, because paste-buffer -d deletes the buffer and two concurrent
+// pastes sharing one name would deliver the wrong body.
+func (c Client) Paste(ctx context.Context, name, body string) error {
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return fmt.Errorf("tmux: paste nonce: %w", err)
+	}
+	buf := "x-paste-" + hex.EncodeToString(nonce[:])
+	if _, err := c.exec(ctx, []byte(body), nil, []string{"load-buffer", "-b", buf, "-"}); err != nil {
+		return err
+	}
+	_, err := c.run(ctx, "paste-buffer", "-p", "-d", "-b", buf, "-t", "="+name+":")
+	return err
+}
+
+// CapturePane returns the visible text of the session's pane.
+func (c Client) CapturePane(ctx context.Context, name string) (string, error) {
+	return c.run(ctx, "capture-pane", "-p", "-t", "="+name+":")
+}
+
+// CaptureTail returns the last lines lines of the session's pane output,
+// scrollback included, with blank lines at both ends trimmed.
+func (c Client) CaptureTail(ctx context.Context, name string, lines int) (string, error) {
+	if lines <= 0 {
+		lines = 1
+	}
+	out, err := c.run(ctx, "capture-pane", "-p", "-t", "="+name+":", "-S", "-"+strconv.Itoa(lines))
+	if err != nil {
+		return "", err
+	}
+	all := strings.Split(strings.Trim(out, " \t\r\n"), "\n")
+	if len(all) > lines {
+		all = all[len(all)-lines:]
+	}
+	return strings.Join(all, "\n"), nil
+}
+
+// PaneCurrentPath returns the live working directory of the session's pane.
+func (c Client) PaneCurrentPath(ctx context.Context, name string) (string, error) {
+	out, err := c.run(ctx, "display-message", "-p", "-t", "="+name+":", "#{pane_current_path}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(out, "\n"), nil
+}
+
+// PaneInfo is one session's liveness and live working directory.
+type PaneInfo struct {
+	Live bool   // the active pane's process is still running
+	Path string // the active pane's current path
+}
+
+// listPanesFormat is one record per pane. The separator is ":" and not a tab:
+// a tmux client outside a UTF-8 locale prints every control character in a
+// format result as "_", which would collapse a tab-separated record. ":" is
+// safe for the name because tmux rewrites ":" and "." in a session name to
+// "_". The path is last because it is the only field that can hold the
+// separator, and the parse splits into at most five fields.
+const listPanesFormat = "#{session_name}:#{window_active}:#{pane_active}:#{pane_dead}:#{pane_current_path}"
+
+// ListPanes reads every session's liveness and active-pane path in one tmux
+// launch. Per session it keeps the active pane of the active window, which is
+// the pane a per-session query resolves. An absent server is an empty map.
+func (c Client) ListPanes(ctx context.Context) (map[string]PaneInfo, error) {
+	out, err := c.run(ctx, "list-panes", "-a", "-F", listPanesFormat)
+	if err != nil {
+		if isGone(err) {
+			return map[string]PaneInfo{}, nil
+		}
+		return nil, err
+	}
+	return parseListPanes(out), nil
+}
+
+func parseListPanes(out string) map[string]PaneInfo {
+	res := map[string]PaneInfo{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.SplitN(line, ":", 5)
+		if len(f) != 5 || f[0] == "" || f[1] != "1" || f[2] != "1" {
+			continue
+		}
+		res[f[0]] = PaneInfo{Live: f[3] != "1", Path: f[4]}
+	}
+	return res
+}
+
 // goneError is a tmux failure that means "no such server or session".
 type goneError struct{ err error }
 
@@ -201,10 +352,13 @@ func isGone(err error) bool {
 // run executes one tmux verb and returns its stdout. A non-zero exit whose
 // message says the server or session is absent comes back as a goneError.
 func (c Client) run(ctx context.Context, args ...string) (string, error) {
-	conf := c.Conf
-	if conf == "" {
-		conf = "/dev/null"
-	}
+	return c.exec(ctx, nil, nil, args)
+}
+
+// exec runs one tmux invocation: args, then (when tail is non-empty) a ";"
+// command separator and a second command. Both are escaped separately, so the
+// separator itself stays unescaped. stdin is fed to the child when non-nil.
+func (c Client) exec(ctx context.Context, stdin []byte, tail, args []string) (string, error) {
 	run := c.Run
 	if run == nil {
 		run = cmdrun.Exec
@@ -213,8 +367,24 @@ func (c Client) run(ctx context.Context, args ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	full := append([]string{"-L", c.Socket, "-f", conf}, args...)
-	res := run(ctx, cmdrun.Call{Name: c.Bin, Args: full, Timeout: callTimeout})
+	var full []string
+	full = append(full, "-L", c.Socket)
+	switch {
+	case c.Conf != "":
+		full = append(full, "-f", c.Conf)
+	case !c.UserConf:
+		full = append(full, "-f", "/dev/null")
+	}
+	full = append(full, args...)
+	if len(tail) > 0 {
+		tail, err = escapeArgs(tail)
+		if err != nil {
+			return "", err
+		}
+		full = append(full, ";")
+		full = append(full, tail...)
+	}
+	res := run(ctx, cmdrun.Call{Name: c.Bin, Args: full, Stdin: stdin, Timeout: callTimeout})
 	verb := args[0]
 	switch {
 	case res.CtxErr != nil:

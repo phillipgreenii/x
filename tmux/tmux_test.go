@@ -398,3 +398,236 @@ func TestArgumentEndingInEscapedSemicolonIsRejected(t *testing.T) {
 		t.Fatalf("tmux was called %d times", n)
 	}
 }
+
+func TestUserConfOmitsConfFlag(t *testing.T) {
+	c, f := newFake(t, "")
+	c.UserConf = true
+	f.On(cmdruntest.Any)
+	if err := c.Kill(context.Background(), "example-a"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-L", "example-sock", "kill-session", "-t", "=example-a"}
+	if got := f.Calls()[0].Args; !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestConfBeatsUserConf(t *testing.T) {
+	c, f := newFake(t, "/example/tmux.conf")
+	c.UserConf = true
+	f.On(cmdruntest.Any)
+	_ = c.Kill(context.Background(), "example-a")
+	if got := f.Calls()[0].Args; !slices.Equal(got[:4], []string{"-L", "example-sock", "-f", "/example/tmux.conf"}) {
+		t.Fatalf("args = %q", got)
+	}
+}
+
+func TestNewSessionOmitsCwdWhenEmpty(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any)
+	if err := c.NewSession(context.Background(), "example-a", "", nil, []string{"sh"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Calls()[0].Args; slices.Contains(got, "-c") {
+		t.Fatalf("args = %q carry -c", got)
+	}
+}
+
+func TestNewSessionRemainOnExitInSameInvocation(t *testing.T) {
+	c, f := newFake(t, "")
+	c.RemainOnExit = "failed"
+	f.On(cmdruntest.Any)
+	if err := c.NewSession(context.Background(), "example;", "/example/cwd", nil, []string{"sh", "-c", "x;"}); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(calls))
+	}
+	want := []string{
+		"-L", "example-sock", "-f", "/dev/null",
+		"new-session", "-d", "-s", `example\;`, "-c", "/example/cwd", "--", "sh", "-c", `x\;`,
+		";", "set-option", "-t", "=example;:", "remain-on-exit", "failed",
+	}
+	if !slices.Equal(calls[0].Args, want) {
+		t.Fatalf("args = %q, want %q", calls[0].Args, want)
+	}
+}
+
+func TestPaneStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  string
+		want PaneStatus
+	}{
+		{"alive", "0||\n", PaneStatus{Exists: true}},
+		{"exit status", "1|3|\n", PaneStatus{Exists: true, Dead: true, Status: 3}},
+		{"signal name", "1||term\n", PaneStatus{Exists: true, Dead: true, Signal: "term"}},
+		{"signal number", "1||15\n", PaneStatus{Exists: true, Dead: true, Signal: "15"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, f := newFake(t, "")
+			f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out(tc.out))
+			got, err := c.PaneStatus(context.Background(), "example-a")
+			if err != nil || got != tc.want {
+				t.Fatalf("PaneStatus = %+v, %v, want %+v", got, err, tc.want)
+			}
+			if a := f.Calls()[0].Args; !slices.Contains(a, "has-session") {
+				t.Fatalf("first call = %q, want has-session first", a)
+			}
+		})
+	}
+}
+
+func TestPaneStatusMissingAndErrors(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any).Return(cmdruntest.Fail(1, "no server running on /tmp/x"))
+	got, err := c.PaneStatus(context.Background(), "example-a")
+	if err != nil || got != (PaneStatus{}) {
+		t.Fatalf("missing server: %+v, %v", got, err)
+	}
+	c, f = newFake(t, "")
+	f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out("garbage\n"))
+	if _, err := c.PaneStatus(context.Background(), "example-a"); err == nil {
+		t.Fatal("want error for malformed output")
+	}
+	c, f = newFake(t, "")
+	f.On(cmdruntest.Any).Return(cmdruntest.Fail(1, "boom"))
+	if _, err := c.PaneStatus(context.Background(), "example-a"); err == nil {
+		t.Fatal("want error for other failure")
+	}
+}
+
+func TestSendKeysArgv(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any)
+	if err := c.SendKeys(context.Background(), "example-a", "Escape", "Enter"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-L", "example-sock", "-f", "/dev/null", "send-keys", "-t", "=example-a:", "Escape", "Enter"}
+	if got := f.Calls()[0].Args; !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestPasteLoadsBufferThenPastesBracketed(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any)
+	if err := c.Paste(context.Background(), "example-a", "line one\nline; two\\"); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(calls))
+	}
+	load, paste := calls[0], calls[1]
+	if string(load.Stdin) != "line one\nline; two\\" {
+		t.Fatalf("stdin = %q", load.Stdin)
+	}
+	buf := load.Args[len(load.Args)-2]
+	if !slices.Equal(load.Args[4:], []string{"load-buffer", "-b", buf, "-"}) {
+		t.Fatalf("load args = %q", load.Args)
+	}
+	if !slices.Equal(paste.Args[4:], []string{"paste-buffer", "-p", "-d", "-b", buf, "-t", "=example-a:"}) {
+		t.Fatalf("paste args = %q", paste.Args)
+	}
+}
+
+func TestPasteBufferNameUniquePerCall(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any)
+	for range 2 {
+		if err := c.Paste(context.Background(), "example-a", "body"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := f.Calls()
+	a, b := calls[0].Args[len(calls[0].Args)-2], calls[2].Args[len(calls[2].Args)-2]
+	if a == b {
+		t.Fatalf("buffer name %q reused", a)
+	}
+}
+
+func TestPasteLoadFailureSkipsPaste(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any).Return(cmdruntest.Fail(1, "boom"))
+	if err := c.Paste(context.Background(), "example-a", "body"); err == nil {
+		t.Fatal("want error")
+	}
+	if n := len(f.Calls()); n != 1 {
+		t.Fatalf("calls = %d, want 1", n)
+	}
+}
+
+func TestCapturePaneAndTail(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any).Seq(cmdruntest.Out("screen\n"), cmdruntest.Out("\n\na\nb\nc\n\n"))
+	got, err := c.CapturePane(context.Background(), "example-a")
+	if err != nil || got != "screen\n" {
+		t.Fatalf("CapturePane = %q, %v", got, err)
+	}
+	tail, err := c.CaptureTail(context.Background(), "example-a", 2)
+	if err != nil || tail != "b\nc" {
+		t.Fatalf("CaptureTail = %q, %v", tail, err)
+	}
+	want := []string{"capture-pane", "-p", "-t", "=example-a:", "-S", "-2"}
+	if got := f.Calls()[1].Args[4:]; !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestCaptureTailNonPositiveLinesIsOne(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any).Return(cmdruntest.Out("a\nb\n"))
+	tail, err := c.CaptureTail(context.Background(), "example-a", 0)
+	if err != nil || tail != "b" {
+		t.Fatalf("CaptureTail = %q, %v", tail, err)
+	}
+}
+
+func TestPaneCurrentPathTrimsNewline(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any).Return(cmdruntest.Out("/example/path with space\n"))
+	got, err := c.PaneCurrentPath(context.Background(), "example-a")
+	if err != nil || got != "/example/path with space" {
+		t.Fatalf("PaneCurrentPath = %q, %v", got, err)
+	}
+	want := []string{"display-message", "-p", "-t", "=example-a:", "#{pane_current_path}"}
+	if a := f.Calls()[0].Args[4:]; !slices.Equal(a, want) {
+		t.Fatalf("args = %q", a)
+	}
+}
+
+func TestParseListPanesKeepsOnlyActivePaneOfActiveWindow(t *testing.T) {
+	out := "a:1:1:0:/p/a\n" +
+		"a:1:0:0:/p/a-other-pane\n" +
+		"a:0:1:0:/p/a-other-window\n" +
+		"b:1:1:1:/p/with:colon and space\n" +
+		"garbage\n"
+	got := parseListPanes(out)
+	want := map[string]PaneInfo{
+		"a": {Live: true, Path: "/p/a"},
+		"b": {Live: false, Path: "/p/with:colon and space"},
+	}
+	if len(got) != len(want) || got["a"] != want["a"] || got["b"] != want["b"] {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestListPanesArgvAndNoServer(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any).Return(cmdruntest.Fail(1, "no server running on /tmp/x"))
+	got, err := c.ListPanes(context.Background())
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("no server: %+v, %v", got, err)
+	}
+	want := []string{"list-panes", "-a", "-F", listPanesFormat}
+	if a := f.Calls()[0].Args[4:]; !slices.Equal(a, want) {
+		t.Fatalf("args = %q", a)
+	}
+	c, f = newFake(t, "")
+	f.On(cmdruntest.Any).Return(cmdruntest.Fail(1, "boom"))
+	if _, err := c.ListPanes(context.Background()); err == nil {
+		t.Fatal("want error for a failure other than no server")
+	}
+}

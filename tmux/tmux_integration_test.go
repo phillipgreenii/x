@@ -224,3 +224,78 @@ func TestRealSemicolonAndHashArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRealRemainOnExitFailedKeepsOnlyFailures(t *testing.T) {
+	c, dir := realClient(t)
+	c.Conf, c.RemainOnExit = "", "failed"
+	ctx := context.Background()
+	if err := c.NewSession(ctx, "example-fail", dir, nil, []string{"sh", "-c", "echo boom; exit 3"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.NewSession(ctx, "example-ok", dir, nil, []string{"sh", "-c", "exit 0"}); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, c, "example-fail")
+	ps, err := c.PaneStatus(ctx, "example-fail")
+	if err != nil || ps != (PaneStatus{Exists: true, Dead: true, Status: 3}) {
+		t.Fatalf("PaneStatus = %+v, %v", ps, err)
+	}
+	tail, err := c.CaptureTail(ctx, "example-fail", 50)
+	if err != nil || !strings.Contains(tail, "boom") {
+		t.Fatalf("CaptureTail = %q, %v", tail, err)
+	}
+	for i := 0; i < 100; i++ {
+		if ps, _ = c.PaneStatus(ctx, "example-ok"); !ps.Exists {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("a clean exit must destroy the session under remain-on-exit failed")
+}
+
+func TestRealPasteSendKeysCaptureAndPaths(t *testing.T) {
+	c, dir := realClient(t)
+	ctx := context.Background()
+	out := filepath.Join(dir, "got")
+	if err := c.NewSession(ctx, "example-a", dir, nil, []string{"sh", "-c", "cat > " + out}); err != nil {
+		t.Fatal(err)
+	}
+	body := "line one\nsemi; colon\\ back #hash"
+	if err := c.Paste(ctx, "example-a", body); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SendKeys(ctx, "example-a", "Enter"); err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	for i := 0; i < 100; i++ {
+		got, _ = os.ReadFile(out)
+		if strings.Contains(string(got), "#hash") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(string(got), "semi; colon\\ back #hash") {
+		t.Fatalf("pane read %q", got)
+	}
+	if _, err := c.CapturePane(ctx, "example-a"); err != nil {
+		t.Fatal(err)
+	}
+	wantDir, _ := filepath.EvalSymlinks(dir)
+	p, err := c.PaneCurrentPath(ctx, "example-a")
+	if gotDir, _ := filepath.EvalSymlinks(p); err != nil || gotDir != wantDir {
+		t.Fatalf("PaneCurrentPath = %q, %v, want %q", p, err, wantDir)
+	}
+	panes, err := c.ListPanes(ctx)
+	if err != nil || !panes["example-a"].Live {
+		t.Fatalf("ListPanes = %+v, %v", panes, err)
+	}
+}
+
+func TestRealListPanesNoServer(t *testing.T) {
+	c, _ := realClient(t)
+	panes, err := c.ListPanes(context.Background())
+	if err != nil || len(panes) != 0 {
+		t.Fatalf("ListPanes = %+v, %v", panes, err)
+	}
+}
