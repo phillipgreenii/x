@@ -21,12 +21,25 @@ import (
 	"path/filepath"
 )
 
+// resolve returns cwd with every symlink resolved, or cwd itself when it does
+// not resolve. Claude keys .projects by the resolved path (on macOS /tmp is
+// /private/tmp), so trust is read and written under that form.
+func resolve(cwd string) string {
+	if r, err := filepath.EvalSymlinks(cwd); err == nil {
+		return r
+	}
+	return cwd
+}
+
 const trustKey = "hasTrustDialogAccepted"
 
 // Ensure sets .projects[cwd].hasTrustDialogAccepted = true in the JSON at
 // path for every cwd, preserving all other content and creating the file when
-// absent. It does not rewrite the file when every cwd is already trusted.
+// absent. Each cwd is resolved through symlinks first (kept as given when it
+// does not resolve), and a symlinked path is written through, not replaced. It does
+// not rewrite the file when every cwd is already trusted.
 func Ensure(path string, cwds ...string) error {
+	cwds = append([]string(nil), cwds...)
 	root, err := load(path)
 	if err != nil {
 		return err
@@ -36,7 +49,9 @@ func Ensure(path string, cwds ...string) error {
 		projects = map[string]any{}
 	}
 	changed := false
-	for _, cwd := range cwds {
+	for i, cwd := range cwds {
+		cwd = resolve(cwd)
+		cwds[i] = cwd
 		proj, _ := projects[cwd].(map[string]any)
 		if proj == nil {
 			proj = map[string]any{}
@@ -65,13 +80,14 @@ func Ensure(path string, cwds ...string) error {
 	return fmt.Errorf("claudetrust: trust write to %s did not stick (concurrent Claude write?)", path)
 }
 
-// IsTrusted reports whether cwd is marked hasTrustDialogAccepted in the JSON
+// IsTrusted reports whether cwd (resolved through symlinks) is marked hasTrustDialogAccepted in the JSON
 // at path. A missing file is not an error: it reports false.
 func IsTrusted(path, cwd string) (bool, error) {
 	root, err := load(path)
 	if err != nil {
 		return false, err
 	}
+	cwd = resolve(cwd)
 	projects, _ := root["projects"].(map[string]any)
 	proj, _ := projects[cwd].(map[string]any)
 	return proj[trustKey] == true, nil
@@ -103,6 +119,10 @@ func load(path string) (map[string]any, error) {
 }
 
 func atomicWriteJSON(path string, v any) error {
+	// Write the file a symlink points at, so the link survives the rename.
+	if r, err := filepath.EvalSymlinks(path); err == nil {
+		path = r
+	}
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err

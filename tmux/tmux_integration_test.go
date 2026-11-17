@@ -183,3 +183,44 @@ func TestRealList(t *testing.T) {
 		t.Fatalf("after kill-server list = %q, err = %v", got, err)
 	}
 }
+
+// Real tmux: arguments ending in ";" arrive intact and a # in the cwd does
+// not send the pane to $HOME.
+func TestRealSemicolonAndHashArguments(t *testing.T) {
+	c, dir := realClient(t)
+	ctx := context.Background()
+	cwd := filepath.Join(dir, "a#b;")
+	if err := os.Mkdir(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	script := `pwd -P > ` + out + `; printf '%s\n' "$FOO" "$@" >> ` + out + `; exec sleep 30`
+	if err := c.NewSession(ctx, "name;", cwd, []string{"FOO=bar;"},
+		[]string{"sh", "-c", script, "sh", "--model", "Resume now;", ";"}); err != nil {
+		t.Fatal(err)
+	}
+	var b []byte
+	for i := 0; i < 100; i++ {
+		b, _ = os.ReadFile(out)
+		if strings.Count(string(b), "\n") >= 5 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	wantCwd, _ := filepath.EvalSymlinks(cwd)
+	want := wantCwd + "\nbar;\n--model\nResume now;\n;\n"
+	if string(b) != want {
+		t.Fatalf("pane saw %q, want %q", b, want)
+	}
+	names, err := c.List(ctx)
+	if err != nil || !slices.Equal(names, []string{"name;"}) {
+		t.Fatalf("List = %q, %v", names, err)
+	}
+	st, err := c.State(ctx, "name;")
+	if err != nil || !st.Exists {
+		t.Fatalf("State = %+v, %v", st, err)
+	}
+	if err := c.Kill(ctx, "name;"); err != nil {
+		t.Fatal(err)
+	}
+}

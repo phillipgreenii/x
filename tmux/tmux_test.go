@@ -337,3 +337,64 @@ func TestWriteConf(t *testing.T) {
 func TestCallsBounded(t *testing.T) {
 	cmdruntest.AssertCallsBounded(t, ".")
 }
+
+func TestEveryArgumentHasTrailingSemicolonEscaped(t *testing.T) {
+	c, f := newFake(t, "/example/tmux.conf")
+	f.On(cmdruntest.Any)
+	err := c.NewSession(context.Background(), "example;", "/example/cwd;",
+		[]string{"FOO=bar;"}, []string{"claude", "--model", ";", "Resume now;", "mid;dle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"-L", "example-sock", "-f", "/example/tmux.conf",
+		"new-session", "-d", "-s", `example\;`, "-c", `/example/cwd\;`,
+		"-e", `FOO=bar\;`, "--", "claude", "--model", `\;`, `Resume now\;`, "mid;dle",
+	}
+	if got := f.Calls()[0].Args; !slices.Equal(got, want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestTargetsEscapeTrailingSemicolon(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any)
+	_, _ = c.State(context.Background(), "x;")
+	_ = c.Kill(context.Background(), "x;")
+	for _, call := range f.Calls() {
+		if !slices.Contains(call.Args, `=x\;`) && !slices.Contains(call.Args, `=x;:`) {
+			t.Fatalf("call %q carries no escaped target", call.Args)
+		}
+	}
+}
+
+func TestCwdHashIsDoubled(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any)
+	if err := c.NewSession(context.Background(), "a", "/ex/a#b", nil, []string{"sh"}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(f.Calls()[0].Args, "/ex/a##b") {
+		t.Fatalf("args = %q", f.Calls()[0].Args)
+	}
+}
+
+func TestArgumentEndingInEscapedSemicolonIsRejected(t *testing.T) {
+	c, f := newFake(t, "")
+	f.On(cmdruntest.Any)
+	ctx := context.Background()
+	for name, err := range map[string]error{
+		"name": c.NewSession(ctx, `a\;`, "/ex", nil, []string{"sh"}),
+		"cwd":  c.NewSession(ctx, "a", `/ex\;`, nil, []string{"sh"}),
+		"env":  c.NewSession(ctx, "a", "/ex", []string{`K=v\;`}, []string{"sh"}),
+		"argv": c.NewSession(ctx, "a", "/ex", nil, []string{"sh", `x\;`}),
+		"kill": c.Kill(ctx, `a\;`),
+	} {
+		if !errors.Is(err, ErrUnescapable) {
+			t.Errorf("%s: err = %v, want ErrUnescapable", name, err)
+		}
+	}
+	if n := len(f.Calls()); n != 0 {
+		t.Fatalf("tmux was called %d times", n)
+	}
+}

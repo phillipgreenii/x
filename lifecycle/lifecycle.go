@@ -113,8 +113,9 @@ type Group struct {
 	timer    *time.Timer
 	disarmed bool
 
-	fired atomic.Bool
-	once  sync.Once // Disarm and expire are mutually exclusive
+	fired     atomic.Bool
+	once      sync.Once // Disarm and expire are mutually exclusive
+	beginOnce sync.Once // the AfterFunc and Disarm both may run begin
 }
 
 type loop struct {
@@ -209,6 +210,15 @@ func (g *Group) Disarm() bool {
 	if g.timer != nil {
 		g.timer.Stop()
 	}
+	g.mu.Unlock()
+	// The context's AfterFunc runs in its own goroutine, so every loop can
+	// return, and Disarm run, before it has recorded the end. The context has
+	// ended, so record it here (once; this waits for a begin already running)
+	// rather than skip shutdown_complete.
+	if g.ctx.Err() != nil {
+		g.begin()
+	}
+	g.mu.Lock()
 	ended := !g.endedAt.IsZero()
 	g.mu.Unlock()
 	if ended {
@@ -221,7 +231,9 @@ func (g *Group) Disarm() bool {
 func (g *Group) Fired() bool { return g.fired.Load() }
 
 // begin runs once when the context ends.
-func (g *Group) begin() {
+func (g *Group) begin() { g.beginOnce.Do(g.doBegin) }
+
+func (g *Group) doBegin() {
 	g.mu.Lock()
 	g.endedAt = time.Now()
 	if !g.disarmed {

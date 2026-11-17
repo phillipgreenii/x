@@ -279,3 +279,33 @@ func (w lockedWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	return w.b.Write(p)
 }
+
+// Every loop returning before the context's AfterFunc has run must still
+// produce shutdown_complete (it was skipped about one run in a hundred).
+func TestCleanFinishEmitsCompleteWhenLoopsReturnImmediately(t *testing.T) {
+	for i := 0; i < 3000; i++ {
+		fs, r := &fakeSignals{}, &recorder{}
+		g := newGroup(t, fs, r, nil)
+		g.Go("loop", func(ctx context.Context) error {
+			<-ctx.Done()
+			return nil
+		})
+		fs.trigger()
+		if err := g.Run(); err != nil {
+			t.Fatal(err)
+		}
+		names := r.names()
+		if len(names) == 0 || names[len(names)-1] != EvClean {
+			t.Fatalf("run %d: events = %v, want last %s", i, names, EvClean)
+		}
+		count := 0
+		for _, n := range names {
+			if n == EvSignal {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("run %d: %d %s events, want 1: %v", i, count, EvSignal, names)
+		}
+	}
+}

@@ -9,10 +9,17 @@
 // Every call is `tmux -L <Socket> -f <Conf> ...` with a 10 second timeout, and
 // session targets use `=<name>` so tmux matches the name exactly, never as a
 // prefix.
+//
+// tmux reads an argument ending in ";" as the end of a command, so every
+// argument forwarded to tmux (session names, targets, cwd, -e values, argv
+// tokens) has a trailing ";" sent as `\;`, which tmux turns back into ";".
+// A value that itself ends in `\;` cannot be passed on intact (tmux delivers
+// `X\\;` as "X;"), so every call returns ErrUnescapable for it.
 package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -21,6 +28,25 @@ import (
 
 	"github.com/phillipgreenii/x/cmdrun"
 )
+
+// ErrUnescapable is returned for an argument ending in `\;`, which tmux
+// cannot deliver intact.
+var ErrUnescapable = errors.New(`tmux: argument ends in \; and cannot be passed to tmux intact`)
+
+// escapeArgs returns args with a trailing ";" escaped for tmux's parser.
+func escapeArgs(args []string) ([]string, error) {
+	out := make([]string, len(args))
+	for i, a := range args {
+		switch {
+		case strings.HasSuffix(a, `\;`):
+			return nil, fmt.Errorf("%w: %q", ErrUnescapable, a)
+		case strings.HasSuffix(a, ";"):
+			a = a[:len(a)-1] + `\;`
+		}
+		out[i] = a
+	}
+	return out, nil
+}
 
 const callTimeout = 10 * time.Second
 
@@ -59,7 +85,8 @@ func (c Client) WriteConf(lines ...string) error {
 // NewSession starts a detached session running argv in cwd. env entries
 // ("K=V") are exported at the session level with -e, in the given order.
 func (c Client) NewSession(ctx context.Context, name, cwd string, env, argv []string) error {
-	args := []string{"new-session", "-d", "-s", name, "-c", cwd}
+	// tmux format-expands -c, so a literal # is sent as ##.
+	args := []string{"new-session", "-d", "-s", name, "-c", strings.ReplaceAll(cwd, "#", "##")}
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}
@@ -182,6 +209,10 @@ func (c Client) run(ctx context.Context, args ...string) (string, error) {
 	if run == nil {
 		run = cmdrun.Exec
 	}
+	args, err := escapeArgs(args)
+	if err != nil {
+		return "", err
+	}
 	full := append([]string{"-L", c.Socket, "-f", conf}, args...)
 	res := run(ctx, cmdrun.Call{Name: c.Bin, Args: full, Timeout: callTimeout})
 	verb := args[0]
@@ -194,7 +225,7 @@ func (c Client) run(ctx context.Context, args ...string) (string, error) {
 		return string(res.Stdout), nil
 	}
 	msg := strings.TrimSpace(string(res.Stderr))
-	err := fmt.Errorf("tmux %s: exit %d (signal %q): %s", verb, res.Code, res.Signal, msg)
+	err = fmt.Errorf("tmux %s: exit %d (signal %q): %s", verb, res.Code, res.Signal, msg)
 	for _, gone := range []string{"no server running", "error connecting to", "can't find session"} {
 		if strings.Contains(msg, gone) {
 			return "", goneError{err}

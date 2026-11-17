@@ -182,3 +182,65 @@ func TestIsTrustedUntrustedProject(t *testing.T) {
 		t.Fatal("must not be trusted")
 	}
 }
+
+func TestSymlinkedCwdIsTrustedUnderResolvedPath(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	link := filepath.Join(dir, "link")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ".claude.json")
+	if err := Ensure(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readProjects(t, path)[resolved]; !ok {
+		t.Fatalf("projects = %v, want key %q", readProjects(t, path), resolved)
+	}
+	for _, c := range []string{link, real} {
+		if ok, err := IsTrusted(path, c); err != nil || !ok {
+			t.Fatalf("IsTrusted(%q) = %v, %v", c, ok, err)
+		}
+	}
+}
+
+func TestUnresolvableCwdKeepsRawPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".claude.json")
+	missing := filepath.Join(dir, "nope")
+	if err := Ensure(path, missing); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := IsTrusted(path, missing); !ok {
+		t.Fatal("missing cwd not trusted under its raw path")
+	}
+}
+
+func TestEnsureWritesThroughSymlinkedClaudeJSON(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	writeJSON(t, target, map[string]any{"keep": 1})
+	path := filepath.Join(dir, ".claude.json")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := Ensure(path, dir); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced: %v, %v", fi, err)
+	}
+	if readRoot(t, target)["keep"] == nil {
+		t.Fatal("target lost its content")
+	}
+	if ok, _ := IsTrusted(target, dir); !ok {
+		t.Fatal("trust not written to the target")
+	}
+}
