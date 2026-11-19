@@ -1,10 +1,11 @@
 {
   description = "phillipgreenii-x: shared Go libraries (formatting managed via nix)";
 
-  # Formatting only (bead pg2-naxmd). This flake exists solely to expose
-  # `nix fmt` / checks.treefmt using the SAME treefmt program set and settings
-  # as every other workspace repo (phillipg-nix-repo-base flakeModules.treefmt).
-  # It does not build the Go module, so Go consumers of this module are unaffected.
+  # Formatting and the per-clone git hook bundle. `nix fmt` / checks.treefmt use
+  # the SAME treefmt program set as every other workspace repo; the pre-commit
+  # flake module adds `install-pre-commit-hooks` with the base hook set
+  # (treefmt incl. gofumpt, shellcheck, whitespace fixers). This flake does not
+  # build the Go module, so Go consumers of it are unaffected.
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
     treefmt-nix.url = "github:numtide/treefmt-nix";
@@ -22,7 +23,10 @@
   outputs =
     inputs@{ flake-parts, phillipgreenii-nix-base, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      imports = [ phillipgreenii-nix-base.flakeModules.treefmt ];
+      # pre-commit transitively imports treefmt (so `nix fmt` / checks.treefmt are
+      # unchanged) and adds the per-clone hook bundle (`install-pre-commit-hooks`).
+      imports = [ phillipgreenii-nix-base.flakeModules.pre-commit ];
+      phillipgreenii.pre-commit.bundle.enable = true;
       systems = [
         "x86_64-linux"
         "aarch64-darwin"

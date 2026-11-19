@@ -7,3 +7,6 @@
 # bd workspace-gate flock (bd creates it beside .beads and never deletes it;
 # left untracked it dirties the canonical clone and blocks ff-merge landing)
 .beads.gate.lock
+
+# git-hooks.nix generated config symlink (must not be committed)
+.pre-commit-config.yaml
