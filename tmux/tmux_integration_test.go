@@ -299,3 +299,37 @@ func TestRealListPanesNoServer(t *testing.T) {
 		t.Fatalf("ListPanes = %+v, %v", panes, err)
 	}
 }
+
+func TestRealSignalDeathDead(t *testing.T) {
+	for _, tc := range []struct {
+		sig, name string
+		num       int
+	}{{"TERM", "term", 15}, {"KILL", "kill", 9}} {
+		sig := tc.sig
+		t.Run(sig, func(t *testing.T) {
+			c, dir := realClient(t)
+			ctx := context.Background()
+			script := `echo $$ > ` + dir + `/pid; exec sleep 30`
+			if err := c.NewSession(ctx, "example-a", dir, nil, []string{"sh", "-c", script}); err != nil {
+				t.Fatal(err)
+			}
+			var pid string
+			for i := 0; i < 100 && !strings.Contains(pid, "\n"); i++ {
+				b, _ := os.ReadFile(filepath.Join(dir, "pid"))
+				pid = string(b)
+				time.Sleep(50 * time.Millisecond)
+			}
+			if err := exec.Command("kill", "-"+sig, strings.TrimSpace(pid)).Run(); err != nil {
+				t.Fatal(err)
+			}
+			waitDead(t, c, "example-a")
+			d, err := c.Dead(ctx, "example-a", 20)
+			if err != nil {
+				t.Fatalf("Dead after SIG%s: %v", sig, err)
+			}
+			if d.SignalName != tc.name || d.Signal != tc.num || d.Status != 0 {
+				t.Fatalf("dead = %+v, want signal %s (%d)", d, tc.name, tc.num)
+			}
+		})
+	}
+}

@@ -169,7 +169,7 @@ func TestPanePIDError(t *testing.T) {
 
 func TestDeadReadsStatusAndTail(t *testing.T) {
 	c, f := newFake(t, "")
-	f.On(cmdruntest.Any).Seq(cmdruntest.Out("1|3|\n"), cmdruntest.Out("boom\n"))
+	f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out("1|3|\n"), cmdruntest.Out("boom\n"))
 	d, err := c.Dead(context.Background(), "example-a", 20)
 	if err != nil {
 		t.Fatal(err)
@@ -178,29 +178,40 @@ func TestDeadReadsStatusAndTail(t *testing.T) {
 		t.Fatalf("dead = %+v", d)
 	}
 	calls := f.Calls()
-	if !slices.Equal(calls[0].Args[4:], []string{
+	if !slices.Equal(calls[1].Args[4:], []string{
 		"display-message", "-p", "-t", "=example-a:",
 		"#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}",
 	}) {
-		t.Fatalf("first = %q", calls[0].Args)
+		t.Fatalf("display = %q", calls[1].Args)
 	}
-	if !slices.Equal(calls[1].Args[4:], []string{"capture-pane", "-p", "-t", "=example-a:", "-S", "-20"}) {
-		t.Fatalf("second = %q", calls[1].Args)
+	if !slices.Equal(calls[2].Args[4:], []string{"capture-pane", "-p", "-t", "=example-a:", "-S", "-20"}) {
+		t.Fatalf("capture = %q", calls[2].Args)
 	}
 }
 
 func TestDeadSignal(t *testing.T) {
 	c, f := newFake(t, "")
-	f.On(cmdruntest.Any).Seq(cmdruntest.Out("1||9\n"), cmdruntest.Out(""))
+	f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out("1||9\n"), cmdruntest.Out(""))
 	d, err := c.Dead(context.Background(), "example-a", 5)
-	if err != nil || d.Signal != 9 || d.Status != 0 {
+	if err != nil || d.Signal != 9 || d.SignalName != "9" || d.Status != 0 {
 		t.Fatalf("dead = %+v, err = %v", d, err)
+	}
+}
+
+func TestDeadSignalName(t *testing.T) {
+	for name, want := range map[string]int{"term": 15, "kill": 9, "unknownsig": 0} {
+		c, f := newFake(t, "")
+		f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out("1||"+name+"\n"), cmdruntest.Out(""))
+		d, err := c.Dead(context.Background(), "example-a", 5)
+		if err != nil || d.Signal != want || d.SignalName != name || d.Status != 0 {
+			t.Fatalf("%s: dead = %+v, err = %v", name, d, err)
+		}
 	}
 }
 
 func TestDeadOnLivePaneIsError(t *testing.T) {
 	c, f := newFake(t, "")
-	f.On(cmdruntest.Any).Return(cmdruntest.Out("0||\n"))
+	f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out("0||\n"))
 	if _, err := c.Dead(context.Background(), "example-a", 5); err == nil {
 		t.Fatal("want error for a live pane")
 	}
@@ -208,19 +219,14 @@ func TestDeadOnLivePaneIsError(t *testing.T) {
 
 func TestDeadBadOutputAndErrors(t *testing.T) {
 	c, f := newFake(t, "")
-	f.On(cmdruntest.Any).Return(cmdruntest.Out("garbage\n"))
+	f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out("garbage\n"))
 	if _, err := c.Dead(context.Background(), "example-a", 5); err == nil {
 		t.Fatal("want parse error")
 	}
 	c, f = newFake(t, "")
-	f.On(cmdruntest.Any).Return(cmdruntest.Out("1|x|\n"))
+	f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out("1|x|\n"))
 	if _, err := c.Dead(context.Background(), "example-a", 5); err == nil {
 		t.Fatal("want status parse error")
-	}
-	c, f = newFake(t, "")
-	f.On(cmdruntest.Any).Return(cmdruntest.Out("1||y\n"))
-	if _, err := c.Dead(context.Background(), "example-a", 5); err == nil {
-		t.Fatal("want signal parse error")
 	}
 	c, f = newFake(t, "")
 	f.On(cmdruntest.Any).Return(cmdruntest.Fail(1, "boom"))
@@ -228,7 +234,7 @@ func TestDeadBadOutputAndErrors(t *testing.T) {
 		t.Fatal("want display error")
 	}
 	c, f = newFake(t, "")
-	f.On(cmdruntest.Any).Seq(cmdruntest.Out("1|3|\n"), cmdruntest.Fail(1, "boom"))
+	f.On(cmdruntest.Any).Seq(cmdruntest.Out(""), cmdruntest.Out("1|3|\n"), cmdruntest.Fail(1, "boom"))
 	if _, err := c.Dead(context.Background(), "example-a", 5); err == nil {
 		t.Fatal("want capture error")
 	}

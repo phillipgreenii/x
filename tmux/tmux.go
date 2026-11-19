@@ -26,6 +26,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/phillipgreenii/x/cmdrun"
@@ -75,7 +76,8 @@ type SessionState struct {
 
 // DeadInfo describes a dead pane.
 type DeadInfo struct {
-	Status, Signal int    // #{pane_dead_status}, #{pane_dead_signal}
+	Status, Signal int    // #{pane_dead_status}; the signal number (0 when none or unrecognised)
+	SignalName     string // #{pane_dead_signal} as tmux prints it ("term" or a number), or ""
 	Tail           string // capture-pane -p -S -<n>
 }
 
@@ -145,36 +147,45 @@ func (c Client) PanePID(ctx context.Context, name string) (int, error) {
 }
 
 // Dead reports how a dead pane ended and the last tailLines lines of its
-// output. It is an error to call it for a pane that is still running.
+// output. It is an error to call it for a pane that is still running or whose
+// session does not exist. It reads the pane state through PaneStatus, so a
+// pane killed by a signal (tmux prints the name, such as "term") is reported
+// rather than rejected.
 func (c Client) Dead(ctx context.Context, name string, tailLines int) (DeadInfo, error) {
-	out, err := c.run(ctx, "display-message", "-p", "-t", "="+name+":",
-		"#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}")
+	ps, err := c.PaneStatus(ctx, name)
 	if err != nil {
 		return DeadInfo{}, err
 	}
-	parts := strings.Split(strings.TrimSpace(out), "|")
-	if len(parts) != 3 {
-		return DeadInfo{}, fmt.Errorf("tmux: unexpected pane state %q", strings.TrimSpace(out))
+	if !ps.Exists {
+		return DeadInfo{}, fmt.Errorf("tmux: session %q does not exist", name)
 	}
-	if parts[0] != "1" {
+	if !ps.Dead {
 		return DeadInfo{}, fmt.Errorf("tmux: pane of %q is not dead", name)
 	}
-	var d DeadInfo
-	if parts[1] != "" {
-		if d.Status, err = strconv.Atoi(parts[1]); err != nil {
-			return DeadInfo{}, fmt.Errorf("tmux: pane_dead_status %q: %w", parts[1], err)
-		}
-	}
-	if parts[2] != "" {
-		if d.Signal, err = strconv.Atoi(parts[2]); err != nil {
-			return DeadInfo{}, fmt.Errorf("tmux: pane_dead_signal %q: %w", parts[2], err)
-		}
-	}
+	d := DeadInfo{Status: ps.Status, SignalName: ps.Signal, Signal: signalNumber(ps.Signal)}
 	d.Tail, err = c.run(ctx, "capture-pane", "-p", "-t", "="+name+":", "-S", "-"+strconv.Itoa(tailLines))
 	if err != nil {
 		return DeadInfo{}, err
 	}
 	return d, nil
+}
+
+// signalNumbers maps the lower-case names tmux prints for #{pane_dead_signal}.
+var signalNumbers = map[string]int{
+	"hup": int(syscall.SIGHUP), "int": int(syscall.SIGINT), "quit": int(syscall.SIGQUIT),
+	"ill": int(syscall.SIGILL), "trap": int(syscall.SIGTRAP), "abrt": int(syscall.SIGABRT),
+	"bus": int(syscall.SIGBUS), "fpe": int(syscall.SIGFPE), "kill": int(syscall.SIGKILL),
+	"usr1": int(syscall.SIGUSR1), "segv": int(syscall.SIGSEGV), "usr2": int(syscall.SIGUSR2),
+	"pipe": int(syscall.SIGPIPE), "alrm": int(syscall.SIGALRM), "term": int(syscall.SIGTERM),
+}
+
+// signalNumber turns what tmux prints (a name or a number) into a signal
+// number; 0 when it is empty or not recognised (SignalName still carries it).
+func signalNumber(s string) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return signalNumbers[strings.TrimPrefix(strings.ToLower(s), "sig")]
 }
 
 // List returns the session names; an absent server is an empty list.
