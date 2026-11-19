@@ -115,6 +115,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-unstable": {
+      "locked": {
+        "lastModified": 1794840529,
+        "narHash": "sha256-ySrWnmZB5UsZTYGHHnBjllT05O5iFjElCRS+mabtfP0=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e21fec321d73511849707a7585e4ea155ee4bf40",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "phillipgreenii-nix-base": {
       "inputs": {
         "flake-parts": "flake-parts",
@@ -123,6 +139,7 @@
         "nixpkgs": [
           "nixpkgs"
         ],
+        "nixpkgs-unstable": "nixpkgs-unstable",
         "pyproject-build-systems": "pyproject-build-systems",
         "pyproject-nix": "pyproject-nix",
         "treefmt-nix": [
@@ -131,11 +148,11 @@
         "uv2nix": "uv2nix"
       },
       "locked": {
-        "lastModified": 1795033365,
-        "narHash": "sha256-uXGYosW9S9pUC2JgDUcZ7QReTW7CZyIeBBvqGNhXP7A=",
+        "lastModified": 1795104492,
+        "narHash": "sha256-lnIs/lCPDR3AgTl3zWWWSqwtzGuaAZe7EW5PDuMP4rc=",
         "owner": "phillipgreenii",
         "repo": "nix-repo-base",
-        "rev": "2b2491800c09856d0554a6982ecf2004972f1443",
+        "rev": "7b08513d93c04bea9db147920335ece8d4619e99",
         "type": "github"
       },
       "original": {
