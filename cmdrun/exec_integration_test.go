@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -156,6 +157,39 @@ func TestExecStderrWriterReceivesLiveAndStillCaptures(t *testing.T) {
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, errors.New("closed") }
+
+func TestExecReapGroupAfterCancelKillsSigtermIgnoringDescendant(t *testing.T) {
+	pidFile := t.TempDir() + "/pid"
+	// The leader exits on SIGTERM; its background child ignores it.
+	script := `(trap '' TERM; echo $BASHPID > ` + pidFile + `; while :; do sleep 1; done) & wait`
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for i := 0; i < 400; i++ {
+			if b, _ := os.ReadFile(pidFile); len(b) > 0 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+	}()
+	res := cmdrun.Exec(ctx, cmdrun.Call{
+		Name: "bash", Args: []string{"-c", script},
+		OwnProcGroup: true, TermGrace: 300 * time.Millisecond, ReapGroupAfterCancel: true,
+	})
+	if res.CtxErr == nil {
+		t.Fatalf("res = %+v", res)
+	}
+	b, _ := os.ReadFile(pidFile)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatalf("pid file %q: %v", b, err)
+	}
+	// Exec has returned: the descendant must already be gone.
+	if err := syscall.Kill(pid, 0); err == nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatalf("descendant %d survived Exec", pid)
+	}
+}
 
 func TestExecFailingStderrWriterDoesNotFailTheRun(t *testing.T) {
 	res := cmdrun.Exec(context.Background(), cmdrun.Call{

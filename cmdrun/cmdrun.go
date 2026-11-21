@@ -77,6 +77,14 @@ type Call struct {
 	// Exec can block is TermGrace plus that delay. A child that handles
 	// SIGTERM and exits 0 still gets CtxErr set, since the context ended.
 	TermGrace time.Duration
+	// ReapGroupAfterCancel is opt-in and only takes effect together with
+	// OwnProcGroup and a positive TermGrace. After a context end, Exec does
+	// not return until every process of the group is gone: it waits for the
+	// group up to the grace deadline, then sends the group SIGKILL, so a
+	// descendant that ignores SIGTERM cannot outlive Exec even when the
+	// group leader exited on SIGTERM. Off keeps the earlier behaviour, where
+	// the pending SIGKILL is dropped once Exec returns.
+	ReapGroupAfterCancel bool
 	// WaitDelay overrides DefaultWaitDelay when positive.
 	WaitDelay time.Duration
 	// Timeout, when positive, bounds the run: Exec derives a child context

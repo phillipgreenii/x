@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -69,18 +70,37 @@ func Exec(ctx context.Context, c Call) Result {
 		// The pipe-release delay only starts counting once the grace has
 		// run out, so it is added on top of the grace.
 		cmd.WaitDelay = c.TermGrace + waitDelay
-		var killTimer *time.Timer
+		var (
+			mu          sync.Mutex
+			killTimer   *time.Timer
+			cancelledAt time.Time
+		)
 		defer func() {
+			mu.Lock()
+			defer mu.Unlock()
 			if killTimer != nil {
 				killTimer.Stop()
 			}
 		}()
 		cmd.Cancel = func() error {
+			mu.Lock()
+			defer mu.Unlock()
+			cancelledAt = time.Now()
 			if err := signal(syscall.SIGTERM); err != nil {
 				return err
 			}
 			killTimer = time.AfterFunc(c.TermGrace, func() { _ = signal(syscall.SIGKILL) })
 			return nil
+		}
+		if c.OwnProcGroup && c.ReapGroupAfterCancel {
+			defer func() {
+				mu.Lock()
+				at := cancelledAt
+				mu.Unlock()
+				if !at.IsZero() && cmd.Process != nil {
+					reapGroup(cmd.Process.Pid, at.Add(c.TermGrace))
+				}
+			}()
 		}
 	case c.OwnProcGroup:
 		cmd.Cancel = func() error { return signal(syscall.SIGKILL) }
@@ -108,6 +128,23 @@ func Exec(ctx context.Context, c Call) Result {
 		res.TimedOut = timedOut(c, parent, res.CtxErr)
 	}
 	return res
+}
+
+// reapGroup waits until no process remains in group pgid or deadline passes,
+// then SIGKILLs whatever is left and waits (bounded) for it to disappear.
+func reapGroup(pgid int, deadline time.Time) {
+	gone := func() bool { return errors.Is(syscall.Kill(-pgid, 0), syscall.ESRCH) }
+	for !gone() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if gone() {
+		return
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	end := time.Now().Add(2 * time.Second)
+	for !gone() && time.Now().Before(end) {
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // timedOut reports whether ctxErr came from c.Timeout rather than from the
